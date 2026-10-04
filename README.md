@@ -9,9 +9,16 @@ directory in `~/.barq`, never inside the project.
 
 ## Install
 
+Requires Go 1.24 or newer.
+
 ```sh
-go install .        # or: go build -o barq .
+go install github.com/iskaa02/barq@latest
 ```
+
+This puts `barq` in `$(go env GOPATH)/bin` (usually `~/go/bin`); make sure
+that's on your `PATH`. Check with `barq --version`.
+
+To build from a clone instead: `go build -o barq .`
 
 ## The TUI
 

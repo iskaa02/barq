@@ -1,4 +1,4 @@
-module barq
+module github.com/iskaa02/barq
 
 go 1.24.2
 

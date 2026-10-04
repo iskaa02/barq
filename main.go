@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -28,6 +29,16 @@ Workspaces are per directory and stored in ~/.barq/workspaces.
 Secret values live in the OS keyring and are never printed.
 `
 
+// version is the module version Go recorded at build time: a tag like
+// v0.1.0 or a pseudo-version with `go install …@latest`, and "(devel)"
+// for local builds.
+func version() string {
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
+		return info.Main.Version
+	}
+	return "(devel)"
+}
+
 func main() {
 	if len(os.Args) > 1 {
 		switch arg := os.Args[1]; {
@@ -35,6 +46,9 @@ func main() {
 			os.Exit(cliMain(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 		case arg == "-h" || arg == "--help" || arg == "help":
 			fmt.Print(usage)
+			return
+		case arg == "-v" || arg == "--version" || arg == "version":
+			fmt.Println("barq", version())
 			return
 		}
 	}
