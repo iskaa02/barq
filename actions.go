@@ -124,6 +124,15 @@ func (m model) rootItems() []paletteItem {
 	})))
 	add(saved, paletteItem{key: "cmd:move", category: "Saved", title: "Move to folder…",
 		next: &paletteStep{title: "Move “" + m.tabName(m.active) + "” to", placeholder: "Folder…", items: folderItems}})
+	if saved {
+		n := len(m.ws.Requests[m.ws.find(t.savedID)].Captures)
+		add(m.ws.activeEnv() != nil, cmd("Saved", "Add capture… (store part of each response in a variable)", fmt.Sprintf("%d set", n), do(func(m *model) {
+			m.ask(promptAddCapture, "Capture (name = jq filter):", "", 0)
+			m.prompt.input.Placeholder = "token = .data.accessToken"
+		})))
+		add(n > 0, paletteItem{key: "cmd:captures", category: "Saved", title: "Remove capture…",
+			next: &paletteStep{title: "Remove a capture", placeholder: "Capture…", items: captureItems}})
+	}
 	add(saved, cmd("Saved", "Delete saved request", "", do(func(m *model) {
 		m.ask(promptDelete, fmt.Sprintf("Delete “%s”?", m.tabName(m.active)), "", 0)
 	})))

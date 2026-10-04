@@ -43,23 +43,27 @@ func normalizeURL(raw string) string {
 	return raw
 }
 
-// sendRequest sends a resolved request in the background. cwd is the
+// runRequest sends a resolved request and reads the response. cwd is the
 // project directory that form-data file paths are relative to.
+func runRequest(ctx context.Context, r request, cwd string) (*response, error) {
+	body, contentType, err := buildBody(r, cwd)
+	if err != nil {
+		return nil, err
+	}
+	headers := headersOf(r)
+	if contentType != "" {
+		// The multipart boundary must match the body.
+		headers.Set("Content-Type", contentType)
+	}
+	msg := doRequest(ctx, r.Method, r.URL, headers, body)
+	return msg.resp, msg.err
+}
+
+// sendRequest sends a resolved request in the background for the TUI.
 func sendRequest(ctx context.Context, tabUID int, r request, cwd string) tea.Cmd {
 	return func() tea.Msg {
-		var msg responseMsg
-		body, contentType, err := buildBody(r, cwd)
-		if err != nil {
-			msg = responseMsg{err: err}
-		} else {
-			headers := headersOf(r)
-			if contentType != "" {
-				// The multipart boundary must match the body.
-				headers.Set("Content-Type", contentType)
-			}
-			msg = doRequest(ctx, r.Method, r.URL, headers, body)
-		}
-		msg.tabUID = tabUID
+		resp, err := runRequest(ctx, r, cwd)
+		msg := responseMsg{tabUID: tabUID, resp: resp, err: err}
 		// Formatting a large body takes a while; do it here rather than
 		// in Update so the UI stays responsive.
 		if msg.resp != nil {

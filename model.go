@@ -812,6 +812,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			t.applyJQ()
 		}
 		m.finishRun(t, msg)
+		m.runCaptures(t, msg.resp)
 		if i == m.active {
 			m.refreshResponse()
 			m.resp.GotoTop()

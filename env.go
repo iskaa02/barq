@@ -62,11 +62,11 @@ func newUUID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
-// envVars returns the active environment's enabled variables.
-func (m model) envVars() map[string]string {
+// envVars returns an environment's enabled variables ("" for none).
+func (w *workspace) envVars(envID string) map[string]string {
 	vars := map[string]string{}
-	if env := m.ws.activeEnv(); env != nil {
-		for _, v := range env.Vars {
+	if i := w.findEnv(envID); i >= 0 {
+		for _, v := range w.Environments[i].Vars {
 			if k := strings.TrimSpace(v.Key); v.Enabled && k != "" {
 				vars[k] = v.Value
 			}
@@ -90,10 +90,18 @@ func substitute(s string, vars map[string]string, missing map[string]bool) strin
 	})
 }
 
-// resolve fills in variables throughout a request and reports any that
-// aren't defined.
+// resolve fills in the active environment's variables.
 func (m model) resolve(r request) (request, []string) {
-	vars := m.envVars()
+	return m.ws.resolve(m.ws.ActiveEnv, r, nil)
+}
+
+// resolve fills in variables from an environment, with overrides taking
+// precedence, and reports any that aren't defined.
+func (w *workspace) resolve(envID string, r request, overrides map[string]string) (request, []string) {
+	vars := w.envVars(envID)
+	for k, v := range overrides {
+		vars[k] = v
+	}
 	missing := map[string]bool{}
 	r.URL = substitute(r.URL, vars, missing)
 	r.Body = substitute(r.Body, vars, missing)

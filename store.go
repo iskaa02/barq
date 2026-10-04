@@ -43,6 +43,8 @@ type request struct {
 	// Where an imported request came from, e.g. "openapi:<title>:GET /users",
 	// so re-importing skips it.
 	Source string `json:"source,omitempty"`
+	// Captures store parts of each successful response in variables.
+	Captures []capture `json:"captures,omitempty"`
 	// Params switched off in the Params tab; enabled ones live in URL.
 	DisabledParams []savedHeader `json:"disabled_params,omitempty"`
 }

@@ -84,15 +84,15 @@ func (m *model) cycleRespTab(delta int) {
 
 // Recording -------------------------------------------------------------------
 
-// beginRun captures what is about to be sent, to be completed by finishRun.
-func (m *model) beginRun(t *tab, typed, sent request) {
+// newRun starts a history entry for a request about to be sent.
+func (w *workspace) newRun(key, name, envID string, typed, sent request) *histEntry {
 	env := ""
-	if e := m.ws.activeEnv(); e != nil {
+	if e, err := w.env(envID); err == nil {
 		env = e.Name
 	}
-	t.pending = &histEntry{
+	return &histEntry{
 		Meta: histMeta{
-			ID: newID(), Key: m.histKey(t), Name: m.tabName(m.tabIndex(t.uid)),
+			ID: newID(), Key: key, Name: name,
 			Time: time.Now(), Env: env, Method: sent.Method, URL: sent.URL,
 			ReqHash: requestHash(typed),
 		},
@@ -101,22 +101,31 @@ func (m *model) beginRun(t *tab, typed, sent request) {
 	}
 }
 
+// recordRun completes a run with its outcome and writes it to history,
+// with secret values scrubbed. Cancelled requests aren't recorded.
+func (w *workspace) recordRun(h *history, e *histEntry, resp *response, err error) error {
+	if e == nil || h == nil || errors.Is(err, context.Canceled) {
+		return nil
+	}
+	if err != nil {
+		e.Meta.Error = err.Error()
+	} else {
+		e.Meta.Status, e.Meta.Code, e.Meta.Duration, e.Meta.Size = resp.Status, resp.StatusCode, resp.Duration, len(resp.Body)
+		e.Proto, e.Headers, e.Body, e.BodyTruncated = resp.Proto, resp.Headers, resp.Body, resp.Truncated
+	}
+	// Tokens sent or returned must not end up in plain text on disk.
+	hideSecretsInRun(e, w.secretValues())
+	return h.add(e)
+}
+
+func (m *model) beginRun(t *tab, typed, sent request) {
+	t.pending = m.ws.newRun(m.histKey(t), m.tabName(m.tabIndex(t.uid)), m.ws.ActiveEnv, typed, sent)
+}
+
 func (m *model) finishRun(t *tab, msg responseMsg) {
 	e := t.pending
 	t.pending = nil
-	if e == nil || m.hist == nil || errors.Is(msg.err, context.Canceled) {
-		return
-	}
-	if msg.err != nil {
-		e.Meta.Error = msg.err.Error()
-	} else {
-		r := msg.resp
-		e.Meta.Status, e.Meta.Code, e.Meta.Duration, e.Meta.Size = r.Status, r.StatusCode, r.Duration, len(r.Body)
-		e.Proto, e.Headers, e.Body, e.BodyTruncated = r.Proto, r.Headers, r.Body, r.Truncated
-	}
-	// Tokens sent or returned must not end up in plain text on disk.
-	hideSecretsInRun(e, m.ws.secretValues())
-	if err := m.hist.add(e); err != nil {
+	if err := m.ws.recordRun(m.hist, e, msg.resp, msg.err); err != nil {
 		m.notice = errorStyle.Render("couldn't record history: " + err.Error())
 	}
 	t.histSel = 0

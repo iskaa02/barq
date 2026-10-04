@@ -26,6 +26,7 @@ const (
 	promptSetVar
 	promptClearHistory
 	promptImportSpec
+	promptAddCapture
 )
 
 // prompt is a one-line question shown in the help bar: either a text input
@@ -116,6 +117,8 @@ func (m model) updatePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.renameEnv(p.id, name)
 		case promptSetVar:
 			m.setVarFromResponse(name)
+		case promptAddCapture:
+			m.addCapture(name)
 		case promptImportSpec:
 			return m, m.loadSpecCmd(name)
 		case promptRename:
