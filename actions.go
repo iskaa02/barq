@@ -164,7 +164,7 @@ func (m model) rootItems() []paletteItem {
 		name string
 		f    focus
 	}{{"URL", focusURL}, {"params", focusParams}, {"headers", focusHeaders}, {"body", focusBody}, {"response", focusResponse}} {
-		add(true, cmd("View", "Focus "+f.name, "", do(func(m *model) { m.setFocus(f.f) })))
+		add(true, cmd("View", "Focus "+f.name, paneKeyLabel(f.f), do(func(m *model) { m.jumpTo(f.f) })))
 	}
 	add(true, paletteItem{key: "cmd:keys", category: "Help", title: "Keyboard shortcuts",
 		next: &paletteStep{title: "Keyboard shortcuts", placeholder: "Search shortcuts…", items: shortcutItems}})
@@ -263,6 +263,8 @@ func shortcutItems(model) []paletteItem {
 		{"Body: raw / form-data", "alt+m"},
 		{"Switch environment", "alt+e"},
 		{"Edit environment variables", "alt+v"},
+		{"Jump to URL / params / headers / body / response / sidebar", "alt+u/p/h/b/r/s"},
+		{"…in terminals where alt is awkward", "ctrl+x then u/p/h/b/r/s"},
 		{"Show / focus / hide sidebar", "ctrl+b"},
 		{"Move focus", "tab / shift+tab"},
 		{"Quit", "ctrl+c"},

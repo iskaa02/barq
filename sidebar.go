@@ -353,11 +353,6 @@ func methodLabel(method string) string {
 func (m model) sidebarView() string {
 	w, h := m.sidebarW(), m.sidebarHeight()
 	inner := w - 4
-	style := paneStyle
-	if m.focus == focusSidebar {
-		style = focusedPaneStyle
-	}
-
 	activeID := m.cur().savedID
 	open := map[string]bool{}
 	for _, t := range m.tabs {
@@ -423,7 +418,7 @@ func (m model) sidebarView() string {
 			b.WriteString(styled + pad + mutedStyle.Render(marker))
 		}
 	}
-	return style.Width(w - 2).Height(h - 2).MaxHeight(h).Render(b.String())
+	return boxed(m.focus == focusSidebar, w, h, []borderLabel{{innerX, paneKeyLabel(focusSidebar)}}, b.String())
 }
 
 // sidebarClick handles a click on content row y of the sidebar.

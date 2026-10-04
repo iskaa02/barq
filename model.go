@@ -769,6 +769,10 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.String() == "ctrl+e" {
 				return m, m.openEditor(m.editTargetForFocus())
 			}
+			if f, ok := paneForKey(msg.String(), true); ok {
+				m.jumpTo(f)
+				return m, nil
+			}
 		} else if msg.String() == "ctrl+x" {
 			m.chord = true
 			return m, nil
@@ -780,7 +784,8 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.find != "" {
 					m.clearFind()
 				}
-			case "ctrl+c", "ctrl+r", "ctrl+s", "alt+enter":
+			case "ctrl+c", "ctrl+r", "ctrl+s", "alt+enter",
+				"alt+u", "alt+p", "alt+h", "alt+b", "alt+r", "alt+s":
 			default:
 				return m.updateBar(msg)
 			}
@@ -821,6 +826,10 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		if f, ok := paneForKey(msg.String(), false); ok {
+			m.jumpTo(f)
+			return m, nil
+		}
 		switch msg.String() {
 		case "ctrl+c":
 			return m, m.quit()
@@ -835,10 +844,10 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+w":
 			m.closeTab(m.active, false)
 			return m, nil
-		case "alt+right", "ctrl+pgdown", "alt+l":
+		case "alt+right", "ctrl+pgdown":
 			m.switchTab((m.active + 1) % len(m.tabs))
 			return m, nil
-		case "alt+left", "ctrl+pgup", "alt+h":
+		case "alt+left", "ctrl+pgup":
 			m.switchTab((m.active + len(m.tabs) - 1) % len(m.tabs))
 			return m, nil
 		case "alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9":
@@ -1046,9 +1055,9 @@ func (m model) View() string {
 func (m model) render() string {
 	reqW, reqH, respW, respH := m.paneSizes()
 
-	req := m.pane(isRequestPane(m.focus), reqW, reqH,
+	req := m.pane(isRequestPane(m.focus), reqW, reqH, m.requestPaneLabels(),
 		m.requestTabs(), m.activeEditorView())
-	resp := m.pane(m.focus == focusResponse, respW, respH,
+	resp := m.pane(m.focus == focusResponse, respW, respH, []borderLabel{{innerX, paneKeyLabel(focusResponse)}},
 		m.responseHeader(respW-4), m.respContentView())
 
 	var panes string
@@ -1122,13 +1131,8 @@ func (m model) activeEditorView() string {
 	return m.headers.View()
 }
 
-func (m model) pane(focused bool, w, h int, header, content string) string {
-	style := paneStyle
-	if focused {
-		style = focusedPaneStyle
-	}
-	inner := lipgloss.JoinVertical(lipgloss.Left, header, content)
-	return style.Width(w - 2).Height(h - 2).MaxHeight(h).Render(inner)
+func (m model) pane(focused bool, w, h int, labels []borderLabel, header, content string) string {
+	return boxed(focused, w, h, labels, lipgloss.JoinVertical(lipgloss.Left, header, content))
 }
 
 func (m model) urlBar() string {
@@ -1141,11 +1145,9 @@ func (m model) urlBar() string {
 	}
 	badge := lipgloss.NewStyle().Width(methodWidth).Align(lipgloss.Center).Render(ms.Render(label))
 
-	style := paneStyle
-	if m.focus == focusMethod || m.focus == focusURL {
-		style = focusedPaneStyle
-	}
-	return style.Width(m.mainW() - 2).Render(badge + "  " + m.url.View())
+	focused := m.focus == focusMethod || m.focus == focusURL
+	labels := []borderLabel{{urlTextX, paneKeyLabel(focusURL)}}
+	return boxed(focused, m.mainW(), 0, labels, badge+"  "+m.url.View())
 }
 
 func tabs(names []string, active int) string {
@@ -1245,9 +1247,9 @@ func (m model) help() string {
 			}
 		}
 		if m.chord {
-			keys = "ctrl+x … (ctrl+e opens $EDITOR)"
+			keys = chordHelp()
 		}
-		line = mutedStyle.Render(" " + keys + " • ctrl+p commands • ctrl+s save • ctrl+r send • ctrl+n new tab • ctrl+w close • alt+←/→ switch tab • ctrl+b sidebar • f2 rename • ctrl+c quit")
+		line = mutedStyle.Render(" " + keys + " • alt+u/p/h/b/r/s jump (shown on each pane) • ctrl+p commands • ctrl+s save • ctrl+r send • ctrl+n new tab • ctrl+w close • alt+←/→ switch tab • ctrl+b sidebar • f2 rename • ctrl+c quit")
 	}
 	return ansi.Truncate(line, m.width, "…")
 }
