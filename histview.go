@@ -114,6 +114,8 @@ func (m *model) finishRun(t *tab, msg responseMsg) {
 		e.Meta.Status, e.Meta.Code, e.Meta.Duration, e.Meta.Size = r.Status, r.StatusCode, r.Duration, len(r.Body)
 		e.Proto, e.Headers, e.Body, e.BodyTruncated = r.Proto, r.Headers, r.Body, r.Truncated
 	}
+	// Tokens sent or returned must not end up in plain text on disk.
+	hideSecretsInRun(e, m.ws.secretValues())
 	if err := m.hist.add(e); err != nil {
 		m.notice = errorStyle.Render("couldn't record history: " + err.Error())
 	}

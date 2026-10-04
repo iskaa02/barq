@@ -42,6 +42,7 @@ const (
 type headerRow struct {
 	key, value string
 	enabled    bool
+	secret     *bool // environment variables only; see savedHeader.Secret
 }
 
 func (r headerRow) empty() bool { return r.key == "" && r.value == "" }
@@ -68,6 +69,9 @@ type headerEditor struct {
 	// fileRoot, when set, marks "@path" values as files relative to it
 	// (form-data), colored by whether the file exists.
 	fileRoot string
+	// secrets, when set, masks secret values (environment variables) and
+	// lets ctrl+l mark a row secret or not.
+	secrets bool
 }
 
 func newHeaderEditor() headerEditor {
@@ -344,6 +348,13 @@ func (h headerEditor) Update(msg tea.Msg) (headerEditor, tea.Cmd) {
 	case "ctrl+t":
 		h.toggleRow()
 		return h, nil
+	case "ctrl+l":
+		if h.secrets {
+			h.commit()
+			r := &h.rows[h.row]
+			r.secret = boolPtr(!isSecret(savedHeader{Key: r.key, Secret: r.secret}))
+			return h, nil
+		}
 	}
 
 	// Typing "Content-Type:" moves straight on to the value. Runes can
@@ -444,6 +455,12 @@ func (h headerEditor) cell(r headerRow, i, col int, text string, w int) string {
 		return mutedStyle.Render(fit(text, w))
 	case col == 0:
 		return headerKeyStyle.Render(fit(text, w))
+	}
+	if h.secrets && isSecret(savedHeader{Key: r.key, Secret: r.secret}) {
+		if text == "" {
+			return mutedStyle.Render(fit("🔒 (empty)", w))
+		}
+		return mutedStyle.Render(fit("🔒 ••••••••", w))
 	}
 	if h.fileRoot != "" {
 		if isFile, exists := formFileState(text, h.fileRoot); isFile {

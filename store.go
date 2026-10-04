@@ -23,6 +23,9 @@ type savedHeader struct {
 	Key     string `json:"key"`
 	Value   string `json:"value"`
 	Enabled bool   `json:"enabled"`
+	// Secret marks an environment variable whose value must never be shown
+	// to the CLI or written in plain text; nil means "decide by its name".
+	Secret *bool `json:"secret,omitempty"`
 }
 
 type request struct {
@@ -93,6 +96,9 @@ type savedTab struct {
 type workspace struct {
 	path  string    // content file
 	stamp fileStamp // content file as last read or written
+
+	keyringCache map[string]string // secret values as last read from or written to the keyring
+	secretErr    error             // set when secrets couldn't go to the keyring
 
 	CWD          string
 	Folders      []folder
@@ -212,6 +218,7 @@ func (w *workspace) readContent() (contentFile, error) {
 	w.Folders, w.Requests, w.Environments, w.ActiveEnv = cf.Folders, cf.Requests, cf.Environments, cf.ActiveEnv
 	w.stamp = stampOf(w.path)
 	w.repair()
+	w.loadSecrets()
 	return cf, nil
 }
 
@@ -324,8 +331,10 @@ func (w *workspace) saveContent() error {
 	if w.Requests == nil {
 		w.Requests = []request{}
 	}
+	envs, err := w.storeSecrets()
+	w.secretErr = err
 	cf := contentFile{CWD: w.CWD, Folders: w.Folders, Requests: w.Requests,
-		Environments: w.Environments, ActiveEnv: w.ActiveEnv}
+		Environments: envs, ActiveEnv: w.ActiveEnv}
 	if err := writeJSONFile(w.path, cf); err != nil {
 		return err
 	}

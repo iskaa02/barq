@@ -114,6 +114,8 @@ type model struct {
 
 	editSeq int // bumped on input; autosave fires once it settles
 
+	warnedKeyring bool
+
 	rcache      renderCache
 	bar         *respBar // find / jq input over the response pane
 	find        string
@@ -328,7 +330,7 @@ func (m *model) cycleFocus(delta int) {
 func toSavedHeaders(rows []headerRow) []savedHeader {
 	var out []savedHeader
 	for _, r := range rows {
-		out = append(out, savedHeader{Key: r.key, Value: r.value, Enabled: r.enabled})
+		out = append(out, savedHeader{Key: r.key, Value: r.value, Enabled: r.enabled, Secret: r.secret})
 	}
 	return out
 }
@@ -336,7 +338,7 @@ func toSavedHeaders(rows []headerRow) []savedHeader {
 func fromSavedHeaders(hs []savedHeader) []headerRow {
 	var out []headerRow
 	for _, h := range hs {
-		out = append(out, headerRow{key: h.Key, value: h.Value, enabled: h.Enabled})
+		out = append(out, headerRow{key: h.Key, value: h.Value, enabled: h.Enabled, secret: h.Secret})
 	}
 	return out
 }
@@ -503,6 +505,10 @@ func (m *model) mutate(fn func(*workspace) error) bool {
 	}
 	m.contentChanged()
 	m.persist()
+	if err := m.ws.secretErr; err != nil && !m.warnedKeyring {
+		m.warnedKeyring = true
+		m.notice = errorStyle.Render("⚠ " + err.Error())
+	}
 	return true
 }
 

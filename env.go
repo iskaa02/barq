@@ -22,6 +22,9 @@ type environment struct {
 	ID   string        `json:"id"`
 	Name string        `json:"name"`
 	Vars []savedHeader `json:"vars,omitempty"`
+	// Protected environments (e.g. production) can't be used from the CLI
+	// without confirming in an interactive terminal.
+	Protected bool `json:"protected,omitempty"`
 }
 
 func (w *workspace) findEnv(id string) int {
@@ -212,6 +215,7 @@ func (m *model) openEnvEditor() {
 		return
 	}
 	t := newKVEditor("Variable", "Value", "+ add variable", false)
+	t.secrets = true
 	t.SetRows(fromSavedHeaders(env.Vars))
 	t.Focus()
 	m.envEdit = &envEditor{envID: env.ID, table: t}
@@ -255,7 +259,10 @@ func (m model) envEditorView() string {
 		name = m.ws.Environments[i].Name
 	}
 	title := titleStyle.Render("Environment: "+name) + mutedStyle.Render("  use as {{variable}} in URL, headers and body")
-	footer := mutedStyle.Render("enter next cell • ctrl+t toggle • ctrl+d delete • esc/ctrl+s save & close")
+	if i := m.ws.findEnv(m.envEdit.envID); i >= 0 && m.ws.Environments[i].Protected {
+		title += lipgloss.NewStyle().Foreground(colorYellow).Render("  🔒 protected")
+	}
+	footer := mutedStyle.Render("enter next cell • ctrl+l secret • ctrl+t toggle • ctrl+d delete • esc/ctrl+s save & close")
 	body := lipgloss.JoinVertical(lipgloss.Left, title, "", m.envEdit.table.View())
 	body = lipgloss.NewStyle().Height(h - 3).Render(body)
 	return lipgloss.NewStyle().
@@ -353,6 +360,7 @@ func (m model) envCommands() []paletteItem {
 				m.prompt.id = id
 			}),
 			cmd("Duplicate", "", (*model).duplicateEnv),
+			cmd(protectTitle(env.Protected), "", func(m *model) { m.setProtected(id, !env.Protected) }),
 			cmd("Delete", "", func(m *model) {
 				m.ask(promptDeleteEnv, fmt.Sprintf("Delete environment “%s”?", name), "", 0)
 				m.prompt.id = id
@@ -365,7 +373,40 @@ func (m model) envCommands() []paletteItem {
 // envIndicator is the title bar's environment label.
 func (m model) envIndicator() string {
 	if env := m.ws.activeEnv(); env != nil {
-		return mutedStyle.Render("env ") + lipgloss.NewStyle().Bold(true).Foreground(colorGreen).Render(env.Name) + " "
+		lock := ""
+		if env.Protected {
+			lock = " 🔒"
+		}
+		warn := ""
+		if m.ws.secretErr != nil {
+			warn = lipgloss.NewStyle().Foreground(colorYellow).Render("⚠ secrets in file (no keyring)  ")
+		}
+		return warn + mutedStyle.Render("env ") + lipgloss.NewStyle().Bold(true).Foreground(colorGreen).Render(env.Name) + lock + " "
 	}
 	return mutedStyle.Render("no environment ")
+}
+
+func protectTitle(protected bool) string {
+	if protected {
+		return "Unprotect"
+	}
+	return "Protect (the CLI must then confirm)"
+}
+
+func (m *model) setProtected(id string, protect bool) {
+	if !m.mutate(func(w *workspace) error {
+		env, err := w.env(id)
+		if err == nil {
+			env.Protected = protect
+		}
+		return err
+	}) {
+		return
+	}
+	env, _ := m.ws.env(id)
+	if protect {
+		m.flash("protected “" + env.Name + "”: the CLI must confirm before using it")
+	} else {
+		m.flash("unprotected “" + env.Name + "”")
+	}
 }

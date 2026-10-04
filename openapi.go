@@ -691,7 +691,10 @@ func schemeVars(schemes *omap) []savedHeader {
 func ensureEnv(ws *workspace, name string, baseURL savedHeader, schemes *omap) {
 	i := ws.findEnv(envIDByName(ws, name))
 	if i < 0 {
-		ws.Environments = append(ws.Environments, environment{ID: newID(), Name: name})
+		// Production servers start protected: the CLI must confirm before
+		// sending anything there.
+		prod := strings.Contains(strings.ToLower(name+" "+baseURL.Value), "prod")
+		ws.Environments = append(ws.Environments, environment{ID: newID(), Name: name, Protected: prod})
 		i = len(ws.Environments) - 1
 	}
 	env := &ws.Environments[i]
