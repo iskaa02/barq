@@ -79,3 +79,7 @@ can't stop an agent from deliberately sending `{{token}}` to a server it
 controls, or from reading the keyring itself (e.g. `secret-tool`). Protected
 environments and your agent's own permission prompts are the safeguards for
 those.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
