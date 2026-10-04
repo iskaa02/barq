@@ -224,3 +224,99 @@ func splitPath(p string) []string {
 	}
 	return parts
 }
+
+// Refs -------------------------------------------------------------------------
+
+// ref is a request or folder found by findRef.
+type ref struct {
+	folder bool
+	id     string
+}
+
+// slashPath is a request's or folder's path joined with "/", the form the
+// CLI prints and accepts.
+func (w *workspace) slashPath(r ref) string {
+	var p string
+	if r.folder {
+		p = w.folderPath(r.id)
+	} else if i := w.find(r.id); i >= 0 {
+		p = w.requestPath(w.Requests[i])
+	}
+	return strings.Join(splitPath(p), "/")
+}
+
+// findRef finds a request or folder by ID, by exact path ("Auth/Login",
+// case-insensitive), or by a unique part of its path.
+func (w *workspace) findRef(s string) (ref, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ref{}, errors.New("empty reference")
+	}
+	if w.find(s) >= 0 {
+		return ref{id: s}, nil
+	}
+	if w.findFolder(s) >= 0 {
+		return ref{folder: true, id: s}, nil
+	}
+
+	var all []ref
+	for _, r := range w.Requests {
+		all = append(all, ref{id: r.ID})
+	}
+	for _, f := range w.Folders {
+		all = append(all, ref{folder: true, id: f.ID})
+	}
+	want := strings.ToLower(strings.Join(splitPath(s), "/"))
+	var partial []ref
+	for _, r := range all {
+		p := strings.ToLower(w.slashPath(r))
+		if p == want {
+			return r, nil
+		}
+		if strings.Contains(p, want) {
+			partial = append(partial, r)
+		}
+	}
+	switch len(partial) {
+	case 0:
+		return ref{}, fmt.Errorf("nothing matches %q (see `barq ls`)", s)
+	case 1:
+		return partial[0], nil
+	}
+	var names []string
+	for i, r := range partial {
+		if i == 8 {
+			names = append(names, fmt.Sprintf("… and %d more", len(partial)-8))
+			break
+		}
+		names = append(names, fmt.Sprintf("  %s  %s", r.id, w.slashPath(r)))
+	}
+	return ref{}, fmt.Errorf("%q matches %d items; use a longer path or an ID:\n%s", s, len(partial), strings.Join(names, "\n"))
+}
+
+func (w *workspace) findRequestRef(s string) (string, error) {
+	r, err := w.findRef(s)
+	if err == nil && r.folder {
+		err = fmt.Errorf("%q is a folder, not a request", s)
+	}
+	return r.id, err
+}
+
+// mkdirAll returns the folder at a slash path, creating missing parts.
+func (w *workspace) mkdirAll(path string) string {
+	parent := ""
+	for _, part := range splitPath(path) {
+		parent = ensureFolder(w, parent, part)
+	}
+	return parent
+}
+
+// envByRef finds an environment by ID or name (case-insensitive).
+func (w *workspace) envByRef(s string) (*environment, error) {
+	for i := range w.Environments {
+		if w.Environments[i].ID == s || strings.EqualFold(w.Environments[i].Name, s) {
+			return &w.Environments[i], nil
+		}
+	}
+	return nil, fmt.Errorf("no environment %q (see `barq env ls`)", s)
+}

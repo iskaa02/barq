@@ -811,8 +811,10 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			t.respY = 0
 			t.applyJQ()
 		}
-		m.finishRun(t, msg)
+		// Capture first, so a token taken from this response is already a
+		// secret when the run is scrubbed and recorded.
 		m.runCaptures(t, msg.resp)
+		m.finishRun(t, msg)
 		if i == m.active {
 			m.refreshResponse()
 			m.resp.GotoTop()

@@ -113,8 +113,14 @@ func (w *workspace) recordRun(h *history, e *histEntry, resp *response, err erro
 		e.Meta.Status, e.Meta.Code, e.Meta.Duration, e.Meta.Size = resp.Status, resp.StatusCode, resp.Duration, len(resp.Body)
 		e.Proto, e.Headers, e.Body, e.BodyTruncated = resp.Proto, resp.Headers, resp.Body, resp.Truncated
 	}
-	// Tokens sent or returned must not end up in plain text on disk.
-	hideSecretsInRun(e, w.secretValues())
+	// Tokens sent or returned must not end up in plain text on disk: secret
+	// values, then credential-like headers and fields.
+	secrets := w.secretValues()
+	hideSecretsInRun(e, secrets)
+	rd := redactor{secrets: secrets}
+	e.Sent = rd.request(e.Sent, false)
+	e.Headers = rd.headers(e.Headers)
+	e.Body = []byte(rd.body(string(e.Body), e.Headers.Get("Content-Type"), false))
 	return h.add(e)
 }
 

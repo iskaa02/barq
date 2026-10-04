@@ -13,19 +13,27 @@ import (
 const usage = `barq — an API client for the terminal
 
 Usage:
-  barq [url | "curl …"]                    open the workspace for this directory
-  barq import <file|url> [--dir <dir>] [--dry-run]
-                                           import an OpenAPI 3 spec (JSON or YAML)
+  barq [url | "curl …"]        open the TUI for this directory's workspace
+  barq <command> [flags]       do the same from scripts and AI agents
+
+Commands:
+  ls, show, new, set, mkdir, mv, rename, rm     requests and folders
+  run, history                                  send requests, past runs
+  env                                           environments and variables
+  curl                                          print a request as curl
+  import                                        import an OpenAPI 3 spec
+  ai                                            the full guide for AI agents
 
 Workspaces are per directory and stored in ~/.barq/workspaces.
+Secret values live in the OS keyring and are never printed.
 `
 
 func main() {
 	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "import":
-			os.Exit(runImport(os.Args[2:]))
-		case "-h", "--help", "help":
+		switch arg := os.Args[1]; {
+		case isCLICommand(arg):
+			os.Exit(cliMain(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+		case arg == "-h" || arg == "--help" || arg == "help":
 			fmt.Print(usage)
 			return
 		}

@@ -102,6 +102,11 @@ func (w *workspace) resolve(envID string, r request, overrides map[string]string
 	for k, v := range overrides {
 		vars[k] = v
 	}
+	return resolveVars(r, vars)
+}
+
+// resolveVars fills in the given variables and lists the ones missing.
+func resolveVars(r request, vars map[string]string) (request, []string) {
 	missing := map[string]bool{}
 	r.URL = substitute(r.URL, vars, missing)
 	r.Body = substitute(r.Body, vars, missing)
