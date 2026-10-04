@@ -43,3 +43,22 @@ func lockWorkspace(ws *workspace) (*os.File, error) {
 	_, _ = f.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
 	return f, nil
 }
+
+// withWriteLock runs fn while holding an exclusive lock on path. Unlike the
+// instance lock, it's held only for the length of one change, so the TUI and
+// CLI can both write the same workspace.
+func withWriteLock(path string, fn func() error) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return fn()
+}

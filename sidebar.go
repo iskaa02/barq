@@ -133,9 +133,7 @@ func (m *model) ensureSideVisible() {
 
 func (m *model) setCollapsed(id string, collapsed bool) {
 	if i := m.ws.findFolder(id); i >= 0 && m.ws.Folders[i].Collapsed != collapsed {
-		m.ws.Folders[i].Collapsed = collapsed
-		m.ensureSideVisible()
-		m.persist()
+		m.mutate(func(w *workspace) error { w.setCollapsed(id, collapsed); return nil })
 	}
 }
 
@@ -272,57 +270,29 @@ func (m *model) updateSidebar(msg tea.KeyMsg) {
 // Folder operations -----------------------------------------------------------
 
 func (m *model) newFolder(parent, name string) {
-	f := folder{ID: newID(), Name: name, Parent: parent}
-	m.ws.Folders = append(m.ws.Folders, f)
-	if i := m.ws.findFolder(parent); i >= 0 {
-		m.ws.Folders[i].Collapsed = false
+	var id string
+	if !m.mutate(func(w *workspace) (err error) { id, err = w.createFolder(parent, name); return err }) {
+		return
 	}
-	m.selectItem(rowFolder, f.ID)
-	m.persist()
+	m.selectItem(rowFolder, id)
 	m.flash("created folder “" + name + "”")
 }
 
 func (m *model) renameFolder(id, name string) {
-	if i := m.ws.findFolder(id); i >= 0 {
-		m.ws.Folders[i].Name = name
-		m.persist()
-	}
+	m.mutate(func(w *workspace) error { return w.renameFolder(id, name) })
 }
 
 // deleteFolder removes a folder with everything in it. Open tabs of deleted
-// requests are kept as unsaved drafts.
+// requests are kept as unsaved drafts (contentChanged).
 func (m *model) deleteFolder(id string) {
 	i := m.ws.findFolder(id)
 	if i < 0 {
 		return
 	}
 	name := m.ws.Folders[i].Name
-	gone := m.ws.subtree(id)
-
-	var keep []request
-	for _, r := range m.ws.Requests {
-		if !gone[r.Folder] {
-			keep = append(keep, r)
-			continue
-		}
-		for _, t := range m.tabs {
-			if t.savedID == r.ID {
-				t.savedID, t.req.ID = "", ""
-			}
-		}
+	if m.mutate(func(w *workspace) error { _, err := w.deleteFolder(id); return err }) {
+		m.flash("deleted folder “" + name + "”")
 	}
-	m.ws.Requests = keep
-
-	var folders []folder
-	for _, f := range m.ws.Folders {
-		if !gone[f.ID] {
-			folders = append(folders, f)
-		}
-	}
-	m.ws.Folders = folders
-	m.ensureSideVisible()
-	m.persist()
-	m.flash("deleted folder “" + name + "”")
 }
 
 // dropMoving moves the item being moved into the destination row's folder.
@@ -341,17 +311,15 @@ func (m *model) dropMoving(dest sideRow) {
 		return
 	}
 	m.moving = nil
-	switch mv.kind {
-	case rowFolder:
-		m.ws.Folders[m.ws.findFolder(mv.id)].Parent = target
-	case rowRequest:
-		m.ws.Requests[m.ws.find(mv.id)].Folder = target
-	}
-	if i := m.ws.findFolder(target); i >= 0 {
-		m.ws.Folders[i].Collapsed = false
+	if !m.mutate(func(w *workspace) error {
+		if mv.kind == rowFolder {
+			return w.moveFolder(mv.id, target)
+		}
+		return w.moveRequest(mv.id, target)
+	}) {
+		return
 	}
 	m.selectItem(mv.kind, mv.id)
-	m.persist()
 	where := "top level"
 	if target != "" {
 		where = m.ws.folderPath(target)

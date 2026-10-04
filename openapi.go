@@ -771,12 +771,15 @@ func (m *model) finishImport(msg specLoadedMsg) {
 		m.notice = errorStyle.Render("import failed: " + msg.err.Error())
 		return
 	}
-	res, err := importOpenAPI(m.ws, msg.spec)
-	if err != nil {
-		m.notice = errorStyle.Render("import failed: " + err.Error())
+	var res importResult
+	if !m.mutate(func(w *workspace) (err error) {
+		if res, err = importOpenAPI(w, msg.spec); err != nil {
+			return fmt.Errorf("import failed: %w", err)
+		}
+		return nil
+	}) {
 		return
 	}
-	m.persist()
 	m.revealFolder(res.FolderID)
 	note := ""
 	if n := len(res.Multipart); n > 0 {

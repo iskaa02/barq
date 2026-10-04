@@ -501,12 +501,11 @@ func (m *model) moveCurrentTo(folderID string) {
 	if j < 0 {
 		return
 	}
-	m.ws.Requests[j].Folder = folderID
-	if i := m.ws.findFolder(folderID); i >= 0 {
-		m.ws.Folders[i].Collapsed = false
+	id := t.savedID
+	if !m.mutate(func(w *workspace) error { return w.moveRequest(id, folderID) }) {
+		return
 	}
-	m.revealInSidebar(t.savedID)
-	m.persist()
+	m.revealInSidebar(id)
 	where := "top level"
 	if folderID != "" {
 		where = m.ws.folderPath(folderID)
@@ -515,19 +514,22 @@ func (m *model) moveCurrentTo(folderID string) {
 }
 
 func (m *model) setAllCollapsed(c bool) {
-	for i := range m.ws.Folders {
-		m.ws.Folders[i].Collapsed = c
-	}
-	m.ensureSideVisible()
-	m.persist()
+	m.mutate(func(w *workspace) error { w.setAllCollapsed(c); return nil })
 }
 
 // revealFolder shows the sidebar with a folder selected, unfolding its
 // parents.
 func (m *model) revealFolder(id string) {
-	for i := m.ws.findFolder(m.ws.Folders[m.ws.findFolder(id)].Parent); i >= 0; i = m.ws.findFolder(m.ws.Folders[i].Parent) {
-		m.ws.Folders[i].Collapsed = false
-	}
+	m.mutate(func(w *workspace) error {
+		i := w.findFolder(id)
+		if i < 0 {
+			return fmt.Errorf("folder %s: %w", id, errNotFound)
+		}
+		for p := w.Folders[i].Parent; p != ""; p = w.Folders[w.findFolder(p)].Parent {
+			w.unfold(p)
+		}
+		return nil
+	})
 	if !m.showSidebar {
 		m.showSidebar = true
 		m.layout()

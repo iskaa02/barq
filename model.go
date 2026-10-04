@@ -218,7 +218,56 @@ func (m *model) makeTab(r request, savedID string) *tab {
 }
 
 func (m model) Init() tea.Cmd {
-	return textinput.Blink
+	return tea.Batch(textinput.Blink, syncTick())
+}
+
+// syncTickMsg checks, about once a second, whether the CLI changed the
+// workspace or recorded runs, and picks the changes up.
+type syncTickMsg struct{}
+
+const syncInterval = time.Second
+
+func syncTick() tea.Cmd {
+	return tea.Tick(syncInterval, func(time.Time) tea.Msg { return syncTickMsg{} })
+}
+
+// syncFromDisk reloads content written by someone else and reconciles the
+// open tabs: deleted requests' tabs become drafts, tabs without unsaved
+// changes take the new version, and tabs with unsaved changes keep them.
+func (m *model) syncFromDisk() {
+	if m.hist != nil && m.hist.changedOnDisk() {
+		_ = m.hist.loadIndex()
+		if m.cur().respTab == respTabHistory && m.cur().viewing == nil {
+			m.refreshResponse()
+		}
+	}
+	if !m.ws.changedOnDisk() {
+		return
+	}
+	old := map[string]request{}
+	for _, r := range m.ws.Requests {
+		old[r.ID] = r
+	}
+	m.captureActive()
+	if err := withWriteLock(m.ws.writeLockPath(), m.ws.reloadContent); err != nil {
+		m.notice = errorStyle.Render("couldn't reload workspace: " + err.Error())
+		return
+	}
+	for i, t := range m.tabs {
+		before, had := old[t.savedID]
+		j := m.ws.find(t.savedID)
+		if t.savedID == "" || !had || j < 0 {
+			continue
+		}
+		now := m.ws.Requests[j]
+		if t.req.sameContent(before) && !now.sameContent(before) {
+			t.req = now
+			if i == m.active {
+				m.loadActive()
+			}
+		}
+	}
+	m.contentChanged()
 }
 
 func (m model) cur() *tab      { return m.tabs[m.active] }
@@ -430,27 +479,64 @@ func (m model) tabIndex(uid int) int {
 
 // Saved requests ------------------------------------------------------------
 
-// persist writes saved requests and open tabs to the workspace file.
+// persist writes the open tabs (the session). Saved requests, folders and
+// environments are written through mutate.
 func (m *model) persist() {
 	m.ws.Tabs = m.ws.Tabs[:0]
 	for i, t := range m.tabs {
 		m.ws.Tabs = append(m.ws.Tabs, savedTab{SavedID: t.savedID, DraftKey: t.draftKey, Request: m.tabRequest(i)})
 	}
 	m.ws.ActiveTab = m.active
-	if err := m.ws.save(); err != nil {
-		m.notice = errorStyle.Render("couldn't save workspace: " + err.Error())
+	if err := m.ws.saveSession(); err != nil {
+		m.notice = errorStyle.Render("couldn't save tabs: " + err.Error())
 	}
+}
+
+// mutate changes the saved content (requests, folders, environments)
+// safely against the CLI writing at the same time, then brings the UI in
+// line with the result. It reports whether the change was saved.
+func (m *model) mutate(fn func(*workspace) error) bool {
+	if err := m.ws.mutate(fn); err != nil {
+		m.notice = errorStyle.Render(err.Error())
+		m.contentChanged()
+		return false
+	}
+	m.contentChanged()
+	m.persist()
+	return true
+}
+
+// contentChanged fixes up UI state after the content changed: tabs of
+// requests that no longer exist become drafts, and selections stay valid.
+func (m *model) contentChanged() {
+	for _, t := range m.tabs {
+		if t.savedID != "" && m.ws.find(t.savedID) < 0 {
+			t.savedID, t.req.ID = "", ""
+		}
+	}
+	if mv := m.moving; mv != nil {
+		if (mv.kind == rowFolder && m.ws.findFolder(mv.id) < 0) || (mv.kind == rowRequest && m.ws.find(mv.id) < 0) {
+			m.moving = nil
+		}
+	}
+	if m.envEdit != nil && m.ws.findEnv(m.envEdit.envID) < 0 {
+		m.envEdit = nil
+	}
+	m.ensureSideVisible()
 }
 
 func (m *model) saveCurrent() {
 	t := m.cur()
-	if j := m.ws.find(t.savedID); t.savedID != "" && j >= 0 {
-		r := m.snapshot()
-		r.ID, r.Name, r.Folder = t.savedID, m.ws.Requests[j].Name, m.ws.Requests[j].Folder
-		m.ws.Requests[j] = r
-		t.req = r
-		m.persist()
-		m.flash("saved “" + r.Name + "”")
+	if t.savedID != "" && m.ws.find(t.savedID) >= 0 {
+		edits, id := m.snapshot(), t.savedID
+		var saved request
+		if !m.mutate(func(w *workspace) error {
+			return w.updateRequest(id, func(r *request) { r.applyEdits(edits); saved = *r })
+		}) {
+			return
+		}
+		t.req = saved
+		m.flash("saved “" + saved.displayName() + "”")
 		return
 	}
 	name := m.snapshot().Name
@@ -471,26 +557,26 @@ func (m *model) saveAs(name, folderID string) {
 	t := m.cur()
 	r := m.snapshot()
 	r.ID, r.Name, r.Folder = newID(), name, folderID
-	m.ws.Requests = append(m.ws.Requests, r)
+	var saved request
+	if !m.mutate(func(w *workspace) error { saved = w.addRequest(r); return nil }) {
+		return
+	}
 	// The draft's runs now belong to the saved request.
 	if t.savedID == "" && m.hist != nil {
-		_ = m.hist.rekey(t.draftKey, r.ID)
+		_ = m.hist.rekey(t.draftKey, saved.ID)
 	}
-	t.savedID, t.req = r.ID, r
-	if i := m.ws.findFolder(folderID); i >= 0 {
-		m.ws.Folders[i].Collapsed = false
-	}
-	m.selectItem(rowRequest, r.ID)
+	t.savedID, t.req = saved.ID, saved
+	m.selectItem(rowRequest, saved.ID)
 	m.persist()
 	m.flash("saved “" + name + "”")
 }
 
 func (m *model) renameSaved(id, name string) {
-	j := m.ws.find(id)
-	if j < 0 {
+	if !m.mutate(func(w *workspace) error {
+		return w.updateRequest(id, func(r *request) { r.Name = name })
+	}) {
 		return
 	}
-	m.ws.Requests[j].Name = name
 	for _, t := range m.tabs {
 		if t.savedID == id {
 			t.req.Name = name
@@ -505,17 +591,10 @@ func (m *model) deleteSaved(id string) {
 		return
 	}
 	name := m.ws.Requests[j].displayName()
-	m.ws.Requests = append(m.ws.Requests[:j], m.ws.Requests[j+1:]...)
-	// Open tabs keep their contents as unsaved drafts.
-	for _, t := range m.tabs {
-		if t.savedID == id {
-			t.savedID = ""
-			t.req.ID = ""
-		}
+	// Open tabs keep their contents as unsaved drafts (contentChanged).
+	if m.mutate(func(w *workspace) error { return w.deleteRequest(id) }) {
+		m.flash("deleted “" + name + "”")
 	}
-	m.ensureSideVisible()
-	m.persist()
-	m.flash("deleted “" + name + "”")
 }
 
 // openSaved switches to the tab editing saved request i, opening one if
@@ -744,6 +823,10 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case editorDoneMsg:
 		m.editorDone(msg)
 		return m, nil
+
+	case syncTickMsg:
+		m.syncFromDisk()
+		return m, syncTick()
 
 	case specLoadedMsg:
 		m.finishImport(msg)

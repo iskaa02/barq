@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Workspaces live in ~/.barq/workspaces, one JSON file per working
@@ -84,18 +86,64 @@ type savedTab struct {
 	Request  request `json:"request"`
 }
 
+// workspace is one directory's saved requests, folders and environments
+// (the content, shared with the CLI) plus the TUI's open tabs (the session).
+// They live in separate files so the CLI can edit content while the TUI is
+// open without either overwriting the other.
 type workspace struct {
-	path string
+	path  string    // content file
+	stamp fileStamp // content file as last read or written
 
-	CWD       string     `json:"cwd"`
-	Folders   []folder   `json:"folders,omitempty"`
-	Requests  []request  `json:"requests"`
-	Tabs      []savedTab `json:"tabs"`
-	ActiveTab int        `json:"active_tab"`
-	Recent    []string   `json:"recent,omitempty"` // palette items, most recent first
+	CWD          string
+	Folders      []folder
+	Requests     []request
+	Environments []environment
+	ActiveEnv    string
 
+	Tabs      []savedTab
+	ActiveTab int
+	Recent    []string // palette items, most recent first
+}
+
+// contentFile is the on-disk shape of the shared content. The session
+// fields are only read, to migrate workspaces saved before the split.
+type contentFile struct {
+	CWD          string        `json:"cwd"`
+	Folders      []folder      `json:"folders,omitempty"`
+	Requests     []request     `json:"requests"`
 	Environments []environment `json:"environments,omitempty"`
 	ActiveEnv    string        `json:"active_env,omitempty"`
+
+	LegacyTabs      []savedTab `json:"tabs,omitempty"`
+	LegacyActiveTab int        `json:"active_tab,omitempty"`
+	LegacyRecent    []string   `json:"recent,omitempty"`
+}
+
+type sessionFile struct {
+	Tabs      []savedTab `json:"tabs"`
+	ActiveTab int        `json:"active_tab"`
+	Recent    []string   `json:"recent,omitempty"`
+}
+
+type fileStamp struct {
+	mod  time.Time
+	size int64
+}
+
+func stampOf(path string) fileStamp {
+	st, err := os.Stat(path)
+	if err != nil {
+		return fileStamp{}
+	}
+	return fileStamp{st.ModTime(), st.Size()}
+}
+
+func (w *workspace) sessionPath() string {
+	return strings.TrimSuffix(w.path, ".json") + ".session.json"
+}
+
+func (w *workspace) writeLockPath() string {
+	return strings.TrimSuffix(w.path, ".json") + ".write.lock"
 }
 
 var unsafeChars = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
@@ -123,19 +171,75 @@ func loadWorkspace(cwd string) (*workspace, error) {
 		return nil, err
 	}
 	ws := &workspace{path: path, CWD: cwd}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return ws, nil
-	}
+	legacy, err := ws.readContent()
 	if err != nil {
 		return ws, err
 	}
-	if err := json.Unmarshal(data, ws); err != nil {
-		return &workspace{path: path, CWD: cwd}, err
+	data, err := os.ReadFile(ws.sessionPath())
+	switch {
+	case err == nil:
+		var sf sessionFile
+		if err := json.Unmarshal(data, &sf); err != nil {
+			return ws, err
+		}
+		ws.Tabs, ws.ActiveTab, ws.Recent = sf.Tabs, sf.ActiveTab, sf.Recent
+	case errors.Is(err, os.ErrNotExist):
+		// Saved before the content/session split: the session was inside
+		// the content file.
+		ws.Tabs, ws.ActiveTab, ws.Recent = legacy.LegacyTabs, legacy.LegacyActiveTab, legacy.LegacyRecent
+	default:
+		return ws, err
 	}
-	ws.path, ws.CWD = path, cwd
-	ws.repair()
 	return ws, nil
+}
+
+// readContent loads the content file into w, leaving the session alone.
+// A missing file means an empty workspace.
+func (w *workspace) readContent() (contentFile, error) {
+	var cf contentFile
+	data, err := os.ReadFile(w.path)
+	if errors.Is(err, os.ErrNotExist) {
+		w.Folders, w.Requests, w.Environments, w.ActiveEnv = nil, nil, nil, ""
+		w.stamp = fileStamp{}
+		return cf, nil
+	}
+	if err != nil {
+		return cf, err
+	}
+	if err := json.Unmarshal(data, &cf); err != nil {
+		return cf, fmt.Errorf("reading %s: %w", w.path, err)
+	}
+	w.Folders, w.Requests, w.Environments, w.ActiveEnv = cf.Folders, cf.Requests, cf.Environments, cf.ActiveEnv
+	w.stamp = stampOf(w.path)
+	w.repair()
+	return cf, nil
+}
+
+// changedOnDisk reports whether someone else (the CLI) wrote the content
+// since w last read or wrote it.
+func (w *workspace) changedOnDisk() bool {
+	return stampOf(w.path) != w.stamp
+}
+
+// reloadContent re-reads the content written by someone else.
+func (w *workspace) reloadContent() error {
+	_, err := w.readContent()
+	return err
+}
+
+// mutate applies a change to the content safely against other writers: it
+// takes the write lock, reloads the latest content, applies fn and writes
+// it back. fn must find things by ID, as positions can change on reload.
+func (w *workspace) mutate(fn func(*workspace) error) error {
+	return withWriteLock(w.writeLockPath(), func() error {
+		if err := w.reloadContent(); err != nil {
+			return err
+		}
+		if err := fn(w); err != nil {
+			return err
+		}
+		return w.saveContent()
+	})
 }
 
 // repair moves anything whose folder no longer exists, or whose parents
@@ -207,19 +311,43 @@ func (w *workspace) countIn(id string) int {
 	return n
 }
 
-// save writes the workspace atomically.
+// save writes both the content and the session. Content writes from a
+// running program should go through mutate instead.
 func (w *workspace) save() error {
-	if err := os.MkdirAll(filepath.Dir(w.path), 0o700); err != nil {
+	if err := w.saveContent(); err != nil {
 		return err
 	}
+	return w.saveSession()
+}
+
+func (w *workspace) saveContent() error {
 	if w.Requests == nil {
 		w.Requests = []request{}
 	}
-	data, err := json.MarshalIndent(w, "", "  ")
+	cf := contentFile{CWD: w.CWD, Folders: w.Folders, Requests: w.Requests,
+		Environments: w.Environments, ActiveEnv: w.ActiveEnv}
+	if err := writeJSONFile(w.path, cf); err != nil {
+		return err
+	}
+	w.stamp = stampOf(w.path)
+	return nil
+}
+
+// saveSession writes the TUI's tabs and recents.
+func (w *workspace) saveSession() error {
+	return writeJSONFile(w.sessionPath(), sessionFile{Tabs: w.Tabs, ActiveTab: w.ActiveTab, Recent: w.Recent})
+}
+
+// writeJSONFile writes v atomically, readable only by the user.
+func writeJSONFile(path string, v any) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(w.path), ".tmp-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
 		return err
 	}
@@ -231,7 +359,7 @@ func (w *workspace) save() error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), w.path)
+	return os.Rename(tmp.Name(), path)
 }
 
 func (w *workspace) find(id string) int {

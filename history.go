@@ -98,16 +98,26 @@ func requestHash(r request) string {
 type history struct {
 	dir   string
 	index []histMeta // oldest first
+	stamp fileStamp  // index file as last read or written
 }
 
 func openHistory(ws *workspace) (*history, error) {
 	h := &history{dir: strings.TrimSuffix(ws.path, ".json") + ".history"}
-	f, err := os.Open(filepath.Join(h.dir, "index.jsonl"))
+	return h, h.loadIndex()
+}
+
+func (h *history) indexPath() string { return filepath.Join(h.dir, "index.jsonl") }
+
+// loadIndex reads the index from disk.
+func (h *history) loadIndex() error {
+	h.index = nil
+	f, err := os.Open(h.indexPath())
 	if errors.Is(err, os.ErrNotExist) {
-		return h, nil
+		h.stamp = fileStamp{}
+		return nil
 	}
 	if err != nil {
-		return h, err
+		return err
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
@@ -118,8 +128,12 @@ func openHistory(ws *workspace) (*history, error) {
 			h.index = append(h.index, m)
 		}
 	}
-	return h, sc.Err()
+	h.stamp = stampOf(h.indexPath())
+	return sc.Err()
 }
+
+// changedOnDisk reports whether another process recorded or pruned runs.
+func (h *history) changedOnDisk() bool { return stampOf(h.indexPath()) != h.stamp }
 
 func (h *history) runPath(id string) string {
 	return filepath.Join(h.dir, "runs", id+".json")
@@ -161,8 +175,20 @@ func (h *history) add(e *histEntry) error {
 		return err
 	}
 	e.Meta.Stored = int64(len(data) + len(body))
+	return withWriteLock(filepath.Join(h.dir, ".write.lock"), func() error { return h.appendLocked(e) })
+}
+
+// appendLocked adds a run to the index while holding the write lock. Runs
+// recorded by another process since the last read are loaded first, so
+// pruning sees all of them.
+func (h *history) appendLocked(e *histEntry) error {
+	if h.changedOnDisk() {
+		if err := h.loadIndex(); err != nil {
+			return err
+		}
+	}
 	line, _ := json.Marshal(e.Meta)
-	f, err := os.OpenFile(filepath.Join(h.dir, "index.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(h.indexPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -174,6 +200,7 @@ func (h *history) add(e *histEntry) error {
 		return err
 	}
 	h.index = append(h.index, e.Meta)
+	h.stamp = stampOf(h.indexPath())
 	return h.prune()
 }
 
@@ -299,5 +326,9 @@ func (h *history) writeIndex() error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), filepath.Join(h.dir, "index.jsonl"))
+	if err := os.Rename(tmp.Name(), h.indexPath()); err != nil {
+		return err
+	}
+	h.stamp = stampOf(h.indexPath())
+	return nil
 }

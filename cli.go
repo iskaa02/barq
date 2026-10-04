@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -55,25 +54,16 @@ func runImport(args []string) int {
 	if err != nil {
 		return fail("reading the workspace: %v", err)
 	}
-	if !*dryRun {
-		lock, err := lockWorkspace(ws)
-		if errors.Is(err, errLocked) {
-			return fail("barq is open in %s.\nClose it first, or import from inside barq: ctrl+p → Import OpenAPI spec…", target)
-		}
-		if err != nil {
-			return fail("locking the workspace: %v", err)
-		}
-		defer lock.Close()
+	var res importResult
+	if *dryRun {
+		res, err = importOpenAPI(ws, spec) // in memory only
+	} else {
+		// Safe while barq is open in that directory: the TUI picks the
+		// import up within a second.
+		err = ws.mutate(func(w *workspace) (err error) { res, err = importOpenAPI(w, spec); return err })
 	}
-
-	res, err := importOpenAPI(ws, spec)
 	if err != nil {
 		return fail("%v", err)
-	}
-	if !*dryRun {
-		if err := ws.save(); err != nil {
-			return fail("saving the workspace: %v", err)
-		}
 	}
 
 	verb := "Imported"

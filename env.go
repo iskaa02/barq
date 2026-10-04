@@ -139,16 +139,15 @@ func headersOf(r request) http.Header {
 // Environment management ----------------------------------------------------
 
 func (m *model) newEnv(name string) {
-	env := environment{ID: newID(), Name: name}
-	m.ws.Environments = append(m.ws.Environments, env)
-	m.ws.ActiveEnv = env.ID
-	m.persist()
-	m.openEnvEditor()
+	if m.mutate(func(w *workspace) error { return w.useEnv(w.addEnv(name, nil)) }) {
+		m.openEnvEditor()
+	}
 }
 
 func (m *model) switchEnv(id string) {
-	m.ws.ActiveEnv = id
-	m.persist()
+	if !m.mutate(func(w *workspace) error { return w.useEnv(id) }) {
+		return
+	}
 	if env := m.ws.activeEnv(); env != nil {
 		m.flash("environment: " + env.Name)
 	} else {
@@ -157,10 +156,7 @@ func (m *model) switchEnv(id string) {
 }
 
 func (m *model) renameEnv(id, name string) {
-	if i := m.ws.findEnv(id); i >= 0 {
-		m.ws.Environments[i].Name = name
-		m.persist()
-	}
+	m.mutate(func(w *workspace) error { return w.renameEnv(id, name) })
 }
 
 func (m *model) deleteEnv(id string) {
@@ -169,12 +165,9 @@ func (m *model) deleteEnv(id string) {
 		return
 	}
 	name := m.ws.Environments[i].Name
-	m.ws.Environments = append(m.ws.Environments[:i], m.ws.Environments[i+1:]...)
-	if m.ws.ActiveEnv == id {
-		m.ws.ActiveEnv = ""
+	if m.mutate(func(w *workspace) error { return w.deleteEnv(id) }) {
+		m.flash("deleted environment “" + name + "”")
 	}
-	m.persist()
-	m.flash("deleted environment “" + name + "”")
 }
 
 func (m *model) duplicateEnv() {
@@ -182,11 +175,16 @@ func (m *model) duplicateEnv() {
 	if env == nil {
 		return
 	}
-	cp := environment{ID: newID(), Name: env.Name + " copy", Vars: slices.Clone(env.Vars)}
-	m.ws.Environments = append(m.ws.Environments, cp)
-	m.ws.ActiveEnv = cp.ID
-	m.persist()
-	m.flash("created “" + cp.Name + "”")
+	id, name := env.ID, env.Name+" copy"
+	if m.mutate(func(w *workspace) error {
+		src, err := w.env(id)
+		if err != nil {
+			return err
+		}
+		return w.useEnv(w.addEnv(name, slices.Clone(src.Vars)))
+	}) {
+		m.flash("created “" + name + "”")
+	}
 }
 
 // setVar sets a variable in the active environment, adding it if needed.
@@ -195,15 +193,8 @@ func (m *model) setVar(name, value string) {
 	if env == nil {
 		return
 	}
-	for i := range env.Vars {
-		if env.Vars[i].Key == name {
-			env.Vars[i].Value, env.Vars[i].Enabled = value, true
-			m.persist()
-			return
-		}
-	}
-	env.Vars = append(env.Vars, savedHeader{Key: name, Value: value, Enabled: true})
-	m.persist()
+	id := env.ID
+	m.mutate(func(w *workspace) error { return w.setEnvVar(id, name, value) })
 }
 
 // Variables editor ------------------------------------------------------------
@@ -230,11 +221,13 @@ func (m *model) openEnvEditor() {
 func (m *model) closeEnvEditor() {
 	e := m.envEdit
 	m.envEdit = nil
-	if i := m.ws.findEnv(e.envID); i >= 0 {
+	if m.ws.findEnv(e.envID) >= 0 {
 		e.table.commit()
-		m.ws.Environments[i].Vars = toSavedHeaders(e.table.Rows())
-		m.persist()
-		m.flash(fmt.Sprintf("saved %d variable(s) in “%s”", len(m.ws.Environments[i].Vars), m.ws.Environments[i].Name))
+		vars := toSavedHeaders(e.table.Rows())
+		if m.mutate(func(w *workspace) error { return w.setEnvVars(e.envID, vars) }) {
+			env, _ := m.ws.env(e.envID)
+			m.flash(fmt.Sprintf("saved %d variable(s) in “%s”", len(vars), env.Name))
+		}
 	}
 }
 
