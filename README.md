@@ -1,0 +1,74 @@
+# barq
+
+An API client for the terminal: a keyboard- and mouse-driven TUI for people,
+and a CLI that lets scripts and AI agents do the same things **without ever
+seeing your secrets**.
+
+Requests, folders, environments and run history are saved per project
+directory in `~/.barq`, never inside the project.
+
+## Install
+
+```sh
+go install .        # or: go build -o barq .
+```
+
+## The TUI
+
+Run `barq` in a project directory (optionally `barq <url>` or `barq "curl …"`).
+
+| Keys | |
+|---|---|
+| `ctrl+p` | command palette: every action, saved request, tab and folder |
+| `alt+u/p/h/b/r/s` | jump to URL / params / headers / body / response / sidebar (also `ctrl+x` + letter) |
+| `ctrl+r`, `enter` in URL | send |
+| `ctrl+s` | save · `ctrl+n` new tab · `ctrl+w` close tab · `alt+←/→` switch tab |
+| `ctrl+x ctrl+e` | edit the focused field in `$EDITOR` |
+| `alt+e` / `alt+v` | switch environment / edit its variables |
+| `/` and `\|` in the response | find / jq filter |
+| `/` in the sidebar | filter saved requests |
+
+Features: tabs, folders, environments with `{{variables}}`, query params and
+multipart form-data (`@file`), response history with per-run diffs, captures
+(`token = .data.accessToken` after each successful send), curl import/export,
+OpenAPI 3 import, and live updates when the CLI changes the workspace.
+
+## The CLI (for scripts and AI agents)
+
+```sh
+barq ai                                   # the full guide, written for agents
+barq ls --json
+barq new "Auth/Login" --method POST --url '{{baseUrl}}/auth/login' \
+    -H 'Content-Type: application/json' --body @login.json \
+    --capture token=.data.accessToken
+barq run "Auth/Login"                     # stores {{token}} as a secret
+barq run "Orders/List orders" --jq '.data[0]' --json
+barq env set dev token - --secret         # value from stdin
+barq import openapi.json
+```
+
+To let an agent such as Claude Code use it, add to the project's `CLAUDE.md`:
+
+> Use `barq` for HTTP/API calls in this project. Run `barq ai` first to learn
+> how. Never put real tokens in requests; use `{{variables}}` and captures.
+
+## Secrets
+
+- Variables named like credentials (`token`, `password`, `api_key`, …), or
+  marked secret (`ctrl+l` in the variables editor, `--secret` in the CLI),
+  are stored in the OS keyring (Secret Service/KWallet, Keychain, Credential
+  Manager). Set `BARQ_KEYRING=off` to keep them in the workspace file instead
+  (barq shows a warning in the title bar).
+- CLI output never contains secret values, credential headers, or
+  credential-like fields in bodies and query strings. `--reveal` works only
+  for a person at an interactive terminal.
+- History on disk is scrubbed the same way.
+- Environments can be **protected** (OpenAPI imports protect production).
+  The CLI won't send requests in a protected environment, unprotect it, or
+  make a secret variable visible without confirmation at a terminal.
+
+**Limits.** Redaction keeps secrets out of what barq prints and stores. It
+can't stop an agent from deliberately sending `{{token}}` to a server it
+controls, or from reading the keyring itself (e.g. `secret-tool`). Protected
+environments and your agent's own permission prompts are the safeguards for
+those.
