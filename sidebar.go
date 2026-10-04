@@ -11,8 +11,14 @@ import (
 
 const sidebarWidth = 34
 
-// Rows inside the sidebar pane above the list: a title and a blank line.
-const sidebarListTop = 2
+// sidebarListTop is the number of rows above the list: the title, the
+// filter line when filtering, and a blank line.
+func (m model) sidebarListTop() int {
+	if m.filterShown() {
+		return 3
+	}
+	return 2
+}
 
 type rowKind int
 
@@ -37,28 +43,35 @@ type sideItem struct {
 func (m model) sidebarHeight() int { return max(m.height-2, 3) } // title and help rows
 
 // sidebarListHeight is how many rows fit in the list.
-func (m model) sidebarListHeight() int { return max(m.sidebarHeight()-2-sidebarListTop, 1) }
+func (m model) sidebarListHeight() int { return max(m.sidebarHeight()-2-m.sidebarListTop(), 1) }
 
 // sideRows flattens the folder tree into the visible rows: at each level,
-// folders first, then requests, both in creation order.
+// folders first, then requests, both in creation order. While filtering,
+// only matches and the folders holding them are shown, all unfolded.
 func (m model) sideRows() []sideRow {
 	var rows []sideRow
 	if m.moving != nil {
 		rows = append(rows, sideRow{kind: rowTop})
 	}
+	terms := m.filterTerms()
+	filtering := len(terms) > 0
+	var matchReqs, matchFolders map[string]bool
+	if filtering {
+		matchReqs, matchFolders = m.filterMatches(terms)
+	}
 	var walk func(parent string, depth int)
 	walk = func(parent string, depth int) {
 		for _, f := range m.ws.Folders {
-			if f.Parent != parent {
+			if f.Parent != parent || (filtering && !matchFolders[f.ID]) {
 				continue
 			}
 			rows = append(rows, sideRow{rowFolder, f.ID, depth})
-			if !f.Collapsed {
+			if !f.Collapsed || filtering {
 				walk(f.ID, depth+1)
 			}
 		}
 		for _, r := range m.ws.Requests {
-			if r.Folder == parent {
+			if r.Folder == parent && (!filtering || matchReqs[r.ID]) {
 				rows = append(rows, sideRow{rowRequest, r.ID, depth})
 			}
 		}
@@ -135,10 +148,29 @@ func (m *model) activate(row sideRow) {
 		}
 	case rowRequest:
 		m.openSaved(m.ws.find(row.id))
+		// From a filtered list, stay there so more matches can be opened.
+		if m.sideFilter.Value() != "" {
+			m.setFocus(focusSidebar)
+			m.selectItem(rowRequest, row.id)
+		}
 	}
 }
 
 func (m *model) updateSidebar(msg tea.KeyMsg) {
+	if m.sideFiltering {
+		m.updateFilter(msg)
+		return
+	}
+	switch msg.String() {
+	case "/":
+		m.startFilter()
+		return
+	case "esc":
+		if m.sideFilter.Value() != "" && m.moving == nil {
+			m.clearFilter()
+			return
+		}
+	}
 	rows := m.sideRows()
 	row, ok := m.selectedRow()
 
@@ -360,11 +392,17 @@ func (m model) sidebarView() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Saved") + mutedStyle.Render(fmt.Sprintf(" · %d", len(m.ws.Requests))))
+	b.WriteString(m.sidebarTitle())
+	if m.filterShown() {
+		b.WriteString("\n" + m.filterLine(inner))
+	}
 	b.WriteString("\n")
 
+	terms := m.filterTerms()
 	rows := m.sideRows()
-	if len(rows) == 0 {
+	if len(rows) == 0 && len(terms) > 0 {
+		b.WriteString("\n" + mutedStyle.Render("No matches."))
+	} else if len(rows) == 0 {
 		b.WriteString("\n" + mutedStyle.Render(ansi.Wrap(
 			"No saved requests in this directory yet.\n\nctrl+s saves the current tab. In this sidebar, f creates a folder.", inner, "")))
 	}
@@ -390,8 +428,11 @@ func (m model) sidebarView() string {
 			}
 			name := ansi.Truncate(f.Name, max(inner-len(indent)-8, 4), "…")
 			count := fmt.Sprintf(" %d", m.ws.countIn(f.ID))
+			if len(terms) > 0 {
+				arrow = "▾ "
+			}
 			plain = indent + arrow + name + count
-			styled = indent + mutedStyle.Render(arrow) + lipgloss.NewStyle().Bold(true).Render(name) + mutedStyle.Render(count)
+			styled = indent + mutedStyle.Render(arrow) + highlightTerms(name, terms, lipgloss.NewStyle().Bold(true)) + mutedStyle.Render(count)
 		case rowRequest:
 			r := m.ws.Requests[m.ws.find(row.id)]
 			method := fmt.Sprintf("%-6s", methodLabel(r.Method))
@@ -401,7 +442,7 @@ func (m model) sidebarView() string {
 			if r.ID == activeID {
 				ns = ns.Foreground(colorAccent).Bold(true)
 			}
-			styled = indent + lipgloss.NewStyle().Bold(true).Foreground(methodColor(r.Method)).Render(method) + " " + ns.Render(name)
+			styled = indent + lipgloss.NewStyle().Bold(true).Foreground(methodColor(r.Method)).Render(method) + " " + highlightTerms(name, terms, ns)
 			if open[r.ID] {
 				marker = "•"
 			}
@@ -424,9 +465,17 @@ func (m model) sidebarView() string {
 // sidebarClick handles a click on content row y of the sidebar.
 func (m *model) sidebarClick(y int) {
 	m.setFocus(focusSidebar)
+	if y == 1 && m.filterShown() {
+		m.startFilter()
+		return
+	}
+	if m.sideFiltering {
+		m.stopEditingFilter()
+	}
 	rows := m.sideRows()
-	i := m.sideOffset + y - sidebarListTop
-	if y < sidebarListTop || i >= len(rows) {
+	top := m.sidebarListTop()
+	i := m.sideOffset + y - top
+	if y < top || i >= len(rows) {
 		return
 	}
 	m.sideSel = i

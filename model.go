@@ -94,6 +94,9 @@ type model struct {
 	sideOffset  int
 	moving      *sideItem // item being moved to another folder, if any
 
+	sideFilter    textinput.Model // sidebar filter query
+	sideFiltering bool            // typing into the filter
+
 	methodIdx int
 	url       textinput.Model
 	params    headerEditor
@@ -172,9 +175,11 @@ func newModel(ws *workspace, loadErr error) model {
 		headers: newHeaderEditor(),
 		body:    newBodyEditor(),
 		form:    newFormEditor(ws.CWD),
-		resp:    viewport.New(0, 0),
-		spinner: sp,
-		wrap:    true,
+
+		sideFilter: newSideFilter(),
+		resp:       viewport.New(0, 0),
+		spinner:    sp,
+		wrap:       true,
 	}
 	m.resp.SetHorizontalStep(4)
 
@@ -222,6 +227,9 @@ func (m model) method() string { return methods[m.methodIdx] }
 func (m *model) setFocus(f focus) {
 	if f == focusSidebar && !m.showSidebar {
 		f = focusMethod
+	}
+	if f != focusSidebar && m.sideFiltering {
+		m.stopEditingFilter()
 	}
 	if f != focusResponse && m.bar != nil {
 		if m.bar.mode == barFind {
@@ -1217,7 +1225,12 @@ func (m model) help() string {
 		var keys string
 		switch m.focus {
 		case focusSidebar:
-			keys = "↑/↓ select • enter open/fold • ←/→ fold • f new folder • m move • r rename • d delete • n new tab"
+			keys = "/ filter • ↑/↓ select • enter open/fold • ←/→ fold • f new folder • m move • r rename • d delete • n new tab"
+			if m.sideFiltering {
+				keys = "type to filter • ↑/↓ select • enter open • esc clear"
+			} else if m.sideFilter.Value() != "" {
+				keys = "/ edit filter • esc clear filter • ↑/↓ select • enter open • m move • r rename • d delete"
+			}
 		case focusMethod:
 			keys = "←/→ change method • g/p/d… jump"
 		case focusURL:
