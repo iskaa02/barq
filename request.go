@@ -29,8 +29,10 @@ type response struct {
 }
 
 type responseMsg struct {
-	resp *response
-	err  error
+	tabUID int
+	resp   *response
+	pretty string // formatted body, prepared off the UI thread
+	err    error
 }
 
 func normalizeURL(raw string) string {
@@ -41,50 +43,78 @@ func normalizeURL(raw string) string {
 	return raw
 }
 
-func sendRequest(ctx context.Context, method, rawURL string, headers http.Header, body string) tea.Cmd {
+// sendRequest sends a resolved request in the background. cwd is the
+// project directory that form-data file paths are relative to.
+func sendRequest(ctx context.Context, tabUID int, r request, cwd string) tea.Cmd {
 	return func() tea.Msg {
-		var reqBody io.Reader
-		if body != "" {
-			reqBody = strings.NewReader(body)
-		}
-		req, err := http.NewRequestWithContext(ctx, method, normalizeURL(rawURL), reqBody)
+		var msg responseMsg
+		body, contentType, err := buildBody(r, cwd)
 		if err != nil {
-			return responseMsg{err: err}
+			msg = responseMsg{err: err}
+		} else {
+			headers := headersOf(r)
+			if contentType != "" {
+				// The multipart boundary must match the body.
+				headers.Set("Content-Type", contentType)
+			}
+			msg = doRequest(ctx, r.Method, r.URL, headers, body)
 		}
-		req.Header = headers
-		if body != "" && req.Header.Get("Content-Type") == "" && json.Valid([]byte(body)) {
-			req.Header.Set("Content-Type", "application/json")
+		msg.tabUID = tabUID
+		// Formatting a large body takes a while; do it here rather than
+		// in Update so the UI stays responsive.
+		if msg.resp != nil {
+			pretty, isJSON := prettyBody(msg.resp)
+			if isJSON {
+				pretty = highlightJSON(pretty)
+			}
+			msg.pretty = pretty
 		}
-		if req.Header.Get("User-Agent") == "" {
-			req.Header.Set("User-Agent", "barq/0.1")
-		}
-
-		start := time.Now()
-		res, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return responseMsg{err: err}
-		}
-		defer res.Body.Close()
-
-		data, err := io.ReadAll(io.LimitReader(res.Body, maxBodySize+1))
-		if err != nil {
-			return responseMsg{err: err}
-		}
-		truncated := len(data) > maxBodySize
-		if truncated {
-			data = data[:maxBodySize]
-		}
-
-		return responseMsg{resp: &response{
-			Status:     res.Status,
-			StatusCode: res.StatusCode,
-			Proto:      res.Proto,
-			Headers:    res.Header,
-			Body:       data,
-			Truncated:  truncated,
-			Duration:   time.Since(start),
-		}}
+		return msg
 	}
+}
+
+func doRequest(ctx context.Context, method, rawURL string, headers http.Header, body []byte) responseMsg {
+	var reqBody io.Reader
+	if len(body) > 0 {
+		reqBody = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, normalizeURL(rawURL), reqBody)
+	if err != nil {
+		return responseMsg{err: err}
+	}
+	req.Header = headers
+	if len(body) > 0 && req.Header.Get("Content-Type") == "" && json.Valid(body) {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", "barq/0.1")
+	}
+
+	start := time.Now()
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return responseMsg{err: err}
+	}
+	defer res.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(res.Body, maxBodySize+1))
+	if err != nil {
+		return responseMsg{err: err}
+	}
+	truncated := len(data) > maxBodySize
+	if truncated {
+		data = data[:maxBodySize]
+	}
+
+	return responseMsg{resp: &response{
+		Status:     res.Status,
+		StatusCode: res.StatusCode,
+		Proto:      res.Proto,
+		Headers:    res.Header,
+		Body:       data,
+		Truncated:  truncated,
+		Duration:   time.Since(start),
+	}}
 }
 
 // prettyBody indents JSON bodies; anything else is returned as-is.

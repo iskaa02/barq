@@ -9,12 +9,13 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// Screen geometry, mirroring View(): a title row, a 3-row URL bar, then the
-// panes. Inside a bordered pane, content starts 2 columns in (border +
-// padding), the tab row is the first inner row, and editors/viewports start
-// two rows below it.
+// Screen geometry, mirroring View(): a title row, then the sidebar beside
+// the main area (tab bar, 3-row URL bar, panes), then the help row. Inside a
+// bordered pane, content starts 2 columns in (border + padding), the tab row
+// is the first inner row, and editors/viewports start two rows below it.
 const (
-	urlBarTop   = 1
+	tabBarRow   = 1
+	urlBarTop   = tabBarRow + 1
 	panesTop    = urlBarTop + 3
 	innerX      = 2
 	contentRowY = 2
@@ -39,6 +40,8 @@ type region int
 
 const (
 	regionNone region = iota
+	regionSidebar
+	regionTabBar
 	regionURLBar
 	regionRequest
 	regionResponse
@@ -47,6 +50,16 @@ const (
 // hit reports which region (x, y) falls in, and the coordinates relative to
 // that region's inner content area.
 func (m model) hit(x, y int) (region, int, int) {
+	if y < tabBarRow || y >= m.height-1 {
+		return regionNone, 0, 0
+	}
+	if sw := m.sidebarW(); x < sw {
+		return regionSidebar, x - innerX, y - tabBarRow - 1
+	}
+	x -= m.sidebarW()
+	if y == tabBarRow {
+		return regionTabBar, x, 0
+	}
 	if y >= urlBarTop && y < panesTop {
 		return regionURLBar, x - innerX, y - urlBarTop - 1
 	}
@@ -70,27 +83,60 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if msg.Action != tea.MouseActionPress {
 		return m, nil
 	}
+	// The environment label at the right of the title bar opens the switcher.
+	if msg.Y == 0 && msg.Button == tea.MouseButtonLeft && msg.X >= m.width-lipgloss.Width(m.envIndicator()) {
+		m.openPalette()
+		m.pushStep(envStep)
+		return m, nil
+	}
 	reg, px, py := m.hit(msg.X, msg.Y)
 
 	switch msg.Button {
 	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+		up := msg.Button == tea.MouseButtonWheelUp
 		switch reg {
+		case regionSidebar:
+			if up {
+				m.sideSel--
+			} else {
+				m.sideSel++
+			}
+			m.ensureSideVisible()
+		case regionTabBar:
+			if up {
+				m.switchTab(m.active - 1)
+			} else {
+				m.switchTab(m.active + 1)
+			}
 		case regionResponse:
 			var cmd tea.Cmd
 			m.resp, cmd = m.resp.Update(msg)
 			return m, cmd
 		case regionRequest:
-			up := msg.Button == tea.MouseButtonWheelUp
 			switch {
-			case m.reqTab == focusHeaders && up:
+			case m.cur().reqTab == focusParams && up:
+				m.params.Wheel(-1)
+			case m.cur().reqTab == focusParams:
+				m.params.Wheel(1)
+			case m.cur().reqTab == focusHeaders && up:
 				m.headers.Wheel(-1)
-			case m.reqTab == focusHeaders:
+			case m.cur().reqTab == focusHeaders:
 				m.headers.Wheel(1)
+			case m.bodyMode == bodyForm && up:
+				m.form.Wheel(-1)
+			case m.bodyMode == bodyForm:
+				m.form.Wheel(1)
 			case up:
 				m.body.CursorUp()
 			default:
 				m.body.CursorDown()
 			}
+		}
+		return m, nil
+
+	case tea.MouseButtonMiddle:
+		if reg == regionTabBar {
+			m.tabBarClick(px, true)
 		}
 		return m, nil
 
@@ -100,6 +146,12 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch reg {
+	case regionSidebar:
+		m.sidebarClick(py)
+
+	case regionTabBar:
+		m.tabBarClick(px, false)
+
 	case regionURLBar:
 		if px < methodWidth {
 			if m.focus == focusMethod {
@@ -112,35 +164,47 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// The input scrolls horizontally when the value overflows, so only
 		// place the cursor when the whole value is visible.
 		if v := []rune(m.url.Value()); len(v) < m.url.Width {
-			m.url.SetCursor(min(max(msg.X-urlTextX, 0), len(v)))
+			m.url.SetCursor(min(max(msg.X-m.sidebarW()-urlTextX, 0), len(v)))
 		}
 
 	case regionRequest:
 		if py == 0 {
-			switch hitTab(m.requestTabNames(), px) {
-			case 0:
-				m.setFocus(focusHeaders)
-			case 1:
-				m.setFocus(focusBody)
+			if i := hitTab(m.requestTabNames(), px); i >= 0 {
+				m.setFocus(requestTabFocus[i])
 			}
 			return m, nil
 		}
-		m.setFocus(m.reqTab)
+		m.setFocus(m.cur().reqTab)
 		switch {
 		case py < contentRowY:
-		case m.reqTab == focusHeaders:
+		case m.cur().reqTab == focusHeaders:
 			m.headers.Click(px, py-contentRowY)
+		case m.cur().reqTab == focusParams:
+			m.params.Click(px, py-contentRowY)
+		case py == contentRowY: // body: the raw / form-data switch
+			m.bodyModeClick(px)
+		case m.bodyMode == bodyForm:
+			m.form.Click(px, py-contentRowY-1)
 		default:
-			placeCursor(&m.body, py-contentRowY, px)
+			placeCursor(&m.body, py-contentRowY-1, px)
 		}
 
 	case regionResponse:
 		m.setFocus(focusResponse)
+		t := m.cur()
 		if py == 0 {
-			if i := hitTab([]string{"Body", "Headers"}, px); i >= 0 && i != m.respTab {
-				m.respTab = i
-				m.resp.GotoTop()
-				m.refreshResponse()
+			if i := hitTab(m.respTabNames(), px); i >= 0 && i != m.activeRespTab() {
+				m.setRespTab(i)
+			}
+		} else if t.viewing == nil && t.respTab == respTabHistory && py >= contentRowY {
+			// Click selects a run; clicking the selected one opens it.
+			if i := m.resp.YOffset + py - contentRowY - histListTop; i >= 0 && i < len(m.runs()) {
+				if i == t.histSel {
+					m.viewRun(m.runs()[i].ID)
+				} else {
+					t.histSel = i
+					m.refreshResponse()
+				}
 			}
 		}
 	}

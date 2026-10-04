@@ -2,6 +2,7 @@ package main
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -65,8 +66,38 @@ func statusColor(code int) lipgloss.TerminalColor {
 	}
 }
 
+// styleCodes holds a style's escape sequences, so hot loops can wrap text
+// in them directly instead of calling Render for every token.
+type styleCodes struct{ pre, suf string }
+
+func codesOf(st lipgloss.Style) styleCodes {
+	const mark = "\uE000" // private-use rune: never part of real output
+	pre, suf, ok := strings.Cut(st.Render(mark), mark)
+	if !ok {
+		return styleCodes{}
+	}
+	return styleCodes{pre, suf}
+}
+
+func (c styleCodes) write(b *strings.Builder, tok string) {
+	b.WriteString(c.pre)
+	b.WriteString(tok)
+	b.WriteString(c.suf)
+}
+
+// The codes depend on the terminal's color support and background, so
+// they're resolved on first use, once the program is running.
+var (
+	jsonCodesOnce                          sync.Once
+	jsonKeyC, jsonStrC, jsonNumC, jsonLitC styleCodes
+)
+
 // highlightJSON colors already-indented JSON. It assumes valid input.
 func highlightJSON(s string) string {
+	jsonCodesOnce.Do(func() {
+		jsonKeyC, jsonStrC = codesOf(jsonKeyStyle), codesOf(jsonStringStyle)
+		jsonNumC, jsonLitC = codesOf(jsonNumberStyle), codesOf(jsonLitStyle)
+	})
 	var b strings.Builder
 	b.Grow(len(s) * 2)
 	for i := 0; i < len(s); {
@@ -89,9 +120,9 @@ func highlightJSON(s string) string {
 				k++
 			}
 			if k < len(s) && s[k] == ':' {
-				b.WriteString(jsonKeyStyle.Render(tok))
+				jsonKeyC.write(&b, tok)
 			} else {
-				b.WriteString(jsonStringStyle.Render(tok))
+				jsonStrC.write(&b, tok)
 			}
 			i = j
 		case c == '-' || (c >= '0' && c <= '9'):
@@ -99,14 +130,14 @@ func highlightJSON(s string) string {
 			for j < len(s) && strings.IndexByte("+-0123456789.eE", s[j]) >= 0 {
 				j++
 			}
-			b.WriteString(jsonNumberStyle.Render(s[i:j]))
+			jsonNumC.write(&b, s[i:j])
 			i = j
 		case c == 't' || c == 'f' || c == 'n':
 			j := i
 			for j < len(s) && s[j] >= 'a' && s[j] <= 'z' {
 				j++
 			}
-			b.WriteString(jsonLitStyle.Render(s[i:j]))
+			jsonLitC.write(&b, s[i:j])
 			i = j
 		default:
 			b.WriteByte(c)

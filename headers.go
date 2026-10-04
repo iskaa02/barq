@@ -61,16 +61,39 @@ type headerEditor struct {
 
 	suggestions []string
 	suggIdx     int
+
+	// Labels and behavior, so the table can edit other key/value lists.
+	keyLabel, valueLabel, addLabel string
+	suggest                        bool
+	// fileRoot, when set, marks "@path" values as files relative to it
+	// (form-data), colored by whether the file exists.
+	fileRoot string
 }
 
 func newHeaderEditor() headerEditor {
+	return newKVEditor("Key", "Value", "+ add header", true)
+}
+
+func newKVEditor(keyLabel, valueLabel, addLabel string, suggest bool) headerEditor {
 	in := textinput.New()
 	in.Prompt = ""
 	in.CharLimit = 0
 	in.PlaceholderStyle = mutedStyle
-	h := headerEditor{rows: []headerRow{{enabled: true}}, input: in}
+	h := headerEditor{rows: []headerRow{{enabled: true}}, input: in,
+		keyLabel: keyLabel, valueLabel: valueLabel, addLabel: addLabel, suggest: suggest}
 	h.load()
 	return h
+}
+
+// Rows returns every non-empty row, including disabled ones.
+func (h headerEditor) Rows() []headerRow {
+	var out []headerRow
+	for _, r := range h.rows {
+		if !r.empty() {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // SetRows replaces all headers.
@@ -132,11 +155,11 @@ func (h *headerEditor) load() {
 	r := h.rows[h.row]
 	if h.col == 0 {
 		h.input.SetValue(r.key)
-		h.input.Placeholder = "Key"
+		h.input.Placeholder = h.keyLabel
 		h.input.Width = max(h.keyW-1, 1)
 	} else {
 		h.input.SetValue(r.value)
-		h.input.Placeholder = "Value"
+		h.input.Placeholder = h.valueLabel
 		h.input.Width = max(h.valueW-1, 1)
 	}
 	h.input.CursorEnd()
@@ -206,6 +229,10 @@ func (h *headerEditor) CloseSuggestions() bool {
 }
 
 func (h *headerEditor) refreshSuggestions() {
+	if !h.suggest {
+		h.suggestions = nil
+		return
+	}
 	q := strings.ToLower(strings.TrimSpace(h.input.Value()))
 	var pool []string
 	if h.col == 0 {
@@ -335,6 +362,11 @@ func (h headerEditor) Update(msg tea.Msg) (headerEditor, tea.Cmd) {
 		return h, nil
 	}
 
+	// "Key: value" typed out: skip the space after the colon jump.
+	if h.col == 1 && h.input.Value() == "" && key.String() == " " {
+		return h, nil
+	}
+
 	var cmd tea.Cmd
 	h.input, cmd = h.input.Update(msg)
 	h.commit()
@@ -405,7 +437,7 @@ func (h headerEditor) cell(r headerRow, i, col int, text string, w int) string {
 	switch {
 	case text == "" && i == len(h.rows)-1:
 		if col == 0 {
-			return fit(mutedStyle.Render("+ add header"), w)
+			return fit(mutedStyle.Render(h.addLabel), w)
 		}
 		return fit("", w)
 	case !r.enabled:
@@ -413,12 +445,23 @@ func (h headerEditor) cell(r headerRow, i, col int, text string, w int) string {
 	case col == 0:
 		return headerKeyStyle.Render(fit(text, w))
 	}
+	if h.fileRoot != "" {
+		if isFile, exists := formFileState(text, h.fileRoot); isFile {
+			if strings.TrimSpace(text) == "@" {
+				return errorStyle.Render(fit("@  ← add a file path", w))
+			}
+			if !exists {
+				return errorStyle.Render(fit(text+"  ✗ not found", w))
+			}
+			return lipgloss.NewStyle().Foreground(colorCyan).Render(fit(text, w))
+		}
+	}
 	return fit(text, w)
 }
 
 func (h headerEditor) View() string {
 	var b strings.Builder
-	b.WriteString(mutedStyle.Render(fit(strings.Repeat(" ", checkWidth)+fit("Key", h.keyW)+" Value", h.width)))
+	b.WriteString(mutedStyle.Render(fit(strings.Repeat(" ", checkWidth)+fit(h.keyLabel, h.keyW)+" "+h.valueLabel, h.width)))
 
 	lines := h.lines()
 	end := min(h.offset+h.bodyHeight(), len(lines))

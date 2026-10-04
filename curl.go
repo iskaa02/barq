@@ -14,6 +14,7 @@ type curlRequest struct {
 	URL     string
 	Headers []headerRow
 	Body    string
+	Form    []headerRow // multipart fields from -F; "@path" values are files
 }
 
 func looksLikeCurl(s string) bool {
@@ -282,7 +283,23 @@ func parseCurl(cmd string) (curlRequest, []string, error) {
 		case "head":
 			req.Method = "HEAD"
 		case "form", "form-string":
-			warnings = append(warnings, "multipart -F/--form isn't supported yet")
+			name, val, ok := strings.Cut(o.val, "=")
+			if !ok || name == "" {
+				warnings = append(warnings, fmt.Sprintf("skipped -F %q: expected name=value", o.val))
+				continue
+			}
+			switch {
+			case o.name == "form-string" && strings.HasPrefix(val, "@"):
+				warnings = append(warnings, fmt.Sprintf("--form-string %s: barq treats values starting with @ as files", name))
+			case o.name == "form" && strings.HasPrefix(val, "@"):
+				// Drop curl's ;type= and ;filename= options; barq picks
+				// the type from the file.
+				path, _, _ := strings.Cut(val[1:], ";")
+				val = "@" + path
+			case o.name == "form" && strings.HasPrefix(val, "<"):
+				warnings = append(warnings, fmt.Sprintf("-F %s=<file (a file's content as text) isn't supported; kept as text", name))
+			}
+			req.Form = append(req.Form, headerRow{key: name, value: val, enabled: true})
 		}
 	}
 
@@ -301,6 +318,9 @@ func parseCurl(cmd string) (curlRequest, []string, error) {
 		req.URL += sep + strings.Join(query, "&")
 	}
 
+	if len(req.Form) > 0 && req.Method == "" {
+		req.Method = "POST"
+	}
 	if len(data) > 0 {
 		sepr := "&"
 		if isJSON {
