@@ -93,6 +93,18 @@ controls, or from reading the keyring itself (e.g. `secret-tool`). Protected
 environments and your agent's own permission prompts are the safeguards for
 those.
 
+## Code layout
+
+```
+main.go          starts the CLI or the TUI
+internal/core    workspaces, environments, secrets, history, sending,
+                 redaction, curl and OpenAPI import (no UI code)
+internal/cli     the `barq <command>` interface
+internal/tui     the Bubble Tea interface
+```
+
+`cli` and `tui` both build on `core`; `core` imports neither.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

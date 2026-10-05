@@ -1,0 +1,64 @@
+//go:build unix
+
+package core
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+)
+
+// ErrLocked means another barq already has this workspace open.
+var ErrLocked = errors.New("workspace is locked")
+
+// LockWorkspace takes an exclusive lock next to the workspace file so only
+// one barq runs per directory. The OS drops the lock when the process exits,
+// even on a crash, so it can never go stale. The returned file must stay
+// open for as long as the lock is needed.
+func LockWorkspace(ws *Workspace) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(ws.Path), 0o700); err != nil {
+		return nil, err
+	}
+	path := strings.TrimSuffix(ws.Path, ".json") + ".lock"
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		defer f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			pid, _ := os.ReadFile(path)
+			if p := strings.TrimSpace(string(pid)); p != "" {
+				return nil, fmt.Errorf("%w by pid %s", ErrLocked, p)
+			}
+			return nil, ErrLocked
+		}
+		return nil, err
+	}
+	_ = f.Truncate(0)
+	_, _ = f.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
+	return f, nil
+}
+
+// WithWriteLock runs fn while holding an exclusive lock on path. Unlike the
+// instance lock, it's held only for the length of one change, so the TUI and
+// CLI can both write the same workspace.
+func WithWriteLock(path string, fn func() error) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return fn()
+}

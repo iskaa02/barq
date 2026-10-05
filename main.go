@@ -9,25 +9,10 @@ import (
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/iskaa02/barq/internal/cli"
+	"github.com/iskaa02/barq/internal/core"
+	"github.com/iskaa02/barq/internal/tui"
 )
-
-const usage = `barq — an API client for the terminal
-
-Usage:
-  barq [url | "curl …"]        open the TUI for this directory's workspace
-  barq <command> [flags]       do the same from scripts and AI agents
-
-Commands:
-  ls, show, new, set, mkdir, mv, rename, rm     requests and folders
-  run, history                                  send requests, past runs
-  env                                           environments and variables
-  curl                                          print a request as curl
-  import                                        import an OpenAPI 3 spec
-  ai                                            the full guide for AI agents
-
-Workspaces are per directory and stored in ~/.barq/workspaces.
-Secret values live in the OS keyring and are never printed.
-`
 
 // version is the module version Go recorded at build time: a tag like
 // v0.1.0 or a pseudo-version with `go install …@latest`, and "(devel)"
@@ -42,10 +27,10 @@ func version() string {
 func main() {
 	if len(os.Args) > 1 {
 		switch arg := os.Args[1]; {
-		case isCLICommand(arg):
-			os.Exit(cliMain(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+		case cli.IsCommand(arg):
+			os.Exit(cli.Main(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 		case arg == "-h" || arg == "--help" || arg == "help":
-			fmt.Print(usage)
+			fmt.Print(cli.Usage)
 			return
 		case arg == "-v" || arg == "--version" || arg == "version":
 			fmt.Println("barq", version())
@@ -58,14 +43,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
-	ws, loadErr := loadWorkspace(cwd)
+	ws, loadErr := core.LoadWorkspace(cwd)
 	if ws == nil {
 		fmt.Fprintln(os.Stderr, "error:", loadErr)
 		os.Exit(1)
 	}
 
-	lock, err := lockWorkspace(ws)
-	if errors.Is(err, errLocked) {
+	lock, err := core.LockWorkspace(ws)
+	if errors.Is(err, core.ErrLocked) {
 		fmt.Fprintf(os.Stderr, "barq is already running in %s (%v).\n", cwd, err)
 		os.Exit(1)
 	}
@@ -75,12 +60,12 @@ func main() {
 	}
 	defer lock.Close()
 
-	m := newModel(ws, loadErr)
+	m := tui.New(ws, loadErr)
 	if len(os.Args) > 1 {
-		if looksLikeCurl(os.Args[1]) {
-			m.importCurl(os.Args[1])
+		if core.LooksLikeCurl(os.Args[1]) {
+			m.ImportCurl(os.Args[1])
 		} else {
-			m.openURL(os.Args[1])
+			m.OpenURL(os.Args[1])
 		}
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
@@ -95,8 +80,8 @@ func main() {
 	}()
 
 	final, err := p.Run()
-	if fm, ok := final.(model); ok {
-		fm.persist()
+	if fm, ok := final.(tui.Model); ok {
+		fm.Persist()
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
