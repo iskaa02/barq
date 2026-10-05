@@ -63,10 +63,19 @@ func (m Model) responseText() string {
 	if content == "" {
 		content = mutedStyle.Render("(empty body)")
 	}
-	if t.result.Truncated {
-		content += "\n" + errorStyle.Render(fmt.Sprintf("… truncated at %s", core.HumanSize(core.MaxBodySize)))
+	if t.result.Partial() {
+		content += "\n" + partialNote(t.result, "“Save body to file…” keeps all of it, “Open whole body in $PAGER” shows it")
 	}
 	return content
+}
+
+// partialNote explains that only the start of a large body is shown.
+func partialNote(r *core.Response, hint string) string {
+	note := fmt.Sprintf("… showing the first %s of %s · %s", core.HumanSize(len(r.Body)), core.HumanSize(r.Size), hint)
+	if r.CutAtCap {
+		note += fmt.Sprintf(" · reading stopped at the %s limit (BARQ_MAX_BODY_MB)", core.HumanSize(r.Size))
+	}
+	return errorStyle.Render(note)
 }
 
 // wrapped is a response rendered for the viewport at one width. Big bodies
@@ -281,6 +290,10 @@ func (m *Model) clearFind() {
 	m.refreshResponse()
 }
 
+// tuiJQLimit is the largest body the jq bar parses. It runs as you type,
+// so it stays below core.JQLimit.
+const tuiJQLimit = 64 << 20
+
 // applyJQ runs the tab's filter and caches the rendered output.
 func (t *tab) applyJQ() {
 	t.jqOut, t.jqErr = "", ""
@@ -290,7 +303,12 @@ func (t *tab) applyJQ() {
 	}
 	// Parse the body once per response, not on every keystroke.
 	if t.jqInputFor != t.result {
-		t.jqInput, t.jqInputErr = core.ParseJSONBody(t.result.Body)
+		body, err := t.result.FullBody(tuiJQLimit)
+		if err != nil {
+			t.jqInput, t.jqInputErr = nil, fmt.Errorf("%v here; try barq history body --jq", err)
+		} else {
+			t.jqInput, t.jqInputErr = core.ParseJSONBody(body)
+		}
 		t.jqInputFor = t.result
 	}
 	if t.jqInputErr != nil {
@@ -338,7 +356,11 @@ func (m *Model) setVarFromResponse(spec string) {
 	if t.result == nil {
 		return
 	}
-	outs, err := core.RunJQ(filter, t.result.Body)
+	body, err := t.result.FullBody(core.JQLimit)
+	var outs []any
+	if err == nil {
+		outs, err = core.RunJQ(filter, body)
+	}
 	if err == nil && len(outs) == 0 {
 		err = errors.New("filter returned nothing")
 	}
@@ -480,7 +502,7 @@ func (m Model) responseHeader(width int) string {
 	case t.result != nil && t.err == nil:
 		r := t.result
 		status := lipgloss.NewStyle().Bold(true).Foreground(statusColor(r.StatusCode)).Render(r.Status)
-		right = status + mutedStyle.Render(fmt.Sprintf("  %s  %s", r.Duration.Round(time.Millisecond), core.HumanSize(len(r.Body))))
+		right = status + mutedStyle.Render(fmt.Sprintf("  %s  %s", r.Duration.Round(time.Millisecond), core.HumanSize(r.Size)))
 	}
 	gap := max(width-lipgloss.Width(left)-lipgloss.Width(right), 1)
 	return ansi.Truncate(left+strings.Repeat(" ", gap)+right, width, "") + "\n"

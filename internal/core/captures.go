@@ -38,13 +38,17 @@ type CapturedVar struct {
 
 var jwtLike = regexp.MustCompile(`^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$`)
 
-// EvalCaptures runs the filters against a response body. Strings are
-// stored as-is; other values as compact JSON.
-func EvalCaptures(caps []Capture, body []byte) []CapturedVar {
+// EvalCaptures runs the filters against the whole response body (up to
+// JQLimit). Strings are stored as-is; other values as compact JSON.
+func EvalCaptures(caps []Capture, resp *Response) []CapturedVar {
+	body, bodyErr := resp.FullBody(JQLimit)
 	out := make([]CapturedVar, 0, len(caps))
 	for _, c := range caps {
 		cv := CapturedVar{Var: c.Var}
-		vals, err := RunJQ(c.Filter, body)
+		vals, err := []any(nil), bodyErr
+		if err == nil {
+			vals, err = RunJQ(c.Filter, body)
+		}
 		switch {
 		case err != nil:
 			cv.Error = err.Error()

@@ -104,7 +104,7 @@ func TestCaptures(t *testing.T) {
 		t.Fatal(err)
 	}
 	caps := []Capture{{"jwt", ".data.accessToken"}, {"userId", ".data.user.id"}, {"missing", ".nope"}}
-	vals := EvalCaptures(caps, resp.Body)
+	vals := EvalCaptures(caps, resp)
 	if err := ws.Mutate(func(w *Workspace) error { return w.StoreCaptured(envID, vals) }); err != nil {
 		t.Fatal(err)
 	}

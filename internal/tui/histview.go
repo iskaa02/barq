@@ -372,8 +372,13 @@ func (m Model) viewingText() string {
 	if body == "" {
 		body = mutedStyle.Render("(empty body)")
 	}
-	if e.BodyTruncated {
-		body += "\n" + errorStyle.Render(fmt.Sprintf("… history keeps the first %s of each body", core.HumanSize(core.HistBodyLimit)))
+	switch r := e.Response(); {
+	case e.Meta.BodyPruned:
+		body = mutedStyle.Render(fmt.Sprintf("(the %s body was pruned to keep history under its size budget)", core.HumanSize(e.Meta.Size)))
+	case e.BodyTruncated:
+		body += "\n" + errorStyle.Render("… history kept the first 10 MB of this body")
+	case r.Partial():
+		body += "\n" + partialNote(r, "barq history body "+e.Meta.ID+" reads all of it")
 	}
 	return body
 }

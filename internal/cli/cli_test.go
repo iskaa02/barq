@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -300,5 +301,105 @@ func TestCLINewFromAndHistorySize(t *testing.T) {
 	json.Unmarshal([]byte(e.ok("history", "show", run.RunID, "--json")), &shown)
 	if shown.Run.Size != run.Size || run.Size == 0 {
 		t.Errorf("sizes: run %d, history %d", run.Size, shown.Run.Size)
+	}
+}
+
+// bigBody is a JSON array of about n bytes, one item per line, with the
+// token echoed and a credential field near the end.
+func bigBody(n int) []byte {
+	var b bytes.Buffer
+	b.WriteString("[\n")
+	for i := 0; b.Len() < n; i++ {
+		fmt.Fprintf(&b, "{\"i\":%d,\"name\":\"item-%d\"},\n", i, i)
+	}
+	b.WriteString(`{"last":true,"echo":"` + testToken + `","password":"pw-42"}` + "\n]")
+	return b.Bytes()
+}
+
+func TestCLILargeBodies(t *testing.T) {
+	body := bigBody(3 << 20)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(body)
+	}))
+	defer srv.Close()
+	e := newCLIEnv(t)
+	e.ok("env", "new", "dev", "--use")
+	e.ok("env", "set", "dev", "token", testToken)
+	e.ok("new", "Big", "--url", srv.URL)
+
+	// run prints the start of it, says so, and points at the rest.
+	var res runJSON
+	json.Unmarshal([]byte(e.ok("run", "Big", "--json")), &res)
+	if !res.Partial || res.Size != int64(len(body)) || res.BodyFile == "" || res.RunID == "" {
+		t.Fatalf("run --json: partial=%v size=%d file=%q", res.Partial, res.Size, res.BodyFile)
+	}
+	if s, _ := res.Body.(string); len(s) > inlineLimit+1024 || !strings.HasPrefix(s, "[\n{\"i\":0") {
+		t.Errorf("inline body: %d bytes", len(s))
+	}
+	if out := e.ok("run", "Big"); !strings.Contains(out, "… showing 1.0 MB of 3.0 MB. Read the rest with: barq history body ") {
+		t.Errorf("text output should say it's partial:\n%s", out[len(out)-300:])
+	}
+
+	// jq reads all of it.
+	id := res.RunID
+	count := strings.Count(string(body), `"name"`) + 1
+	if out := e.ok("run", "Big", "--jq", "length"); !strings.HasSuffix(out, "\n\n"+fmt.Sprint(count)+"\n") {
+		t.Errorf("run --jq length: %q, want %d", out[max(len(out)-40, 0):], count)
+	}
+	if out := strings.TrimSpace(e.ok("history", "body", id, "--jq", "length")); out != fmt.Sprint(count) {
+		t.Errorf("history body --jq length = %s, want %d", out, count)
+	}
+
+	// The whole body is in history, scrubbed.
+	whole := e.ok("history", "body", id)
+	if strings.TrimSpace(whole) == "" || !strings.Contains(whole, `"last":true`) || len(whole) < len(body)-1024 {
+		t.Errorf("history body: %d bytes, want about %d", len(whole), len(body))
+	}
+	if out := e.ok("history", "body", id, "--grep", `"last"`); !strings.Contains(out, `"password":"«redacted»"`) {
+		t.Errorf("grep: %q", out)
+	}
+	if out := e.ok("history", "body", id, "--lines", "2:3"); out != "{\"i\":0,\"name\":\"item-0\"},\n{\"i\":1,\"name\":\"item-1\"},\n" {
+		t.Errorf("lines: %q", out)
+	}
+	if out := e.ok("history", "body", id, "--bytes", ":9"); out != "[\n{\"i\":0," {
+		t.Errorf("bytes: %q", out)
+	}
+	path := strings.TrimSpace(e.ok("history", "body", id, "--path"))
+	if data, err := os.ReadFile(path); err != nil || !bytes.Contains(data, []byte(`"last":true`)) {
+		t.Errorf("--path %q: %v", path, err)
+	}
+	if code, _, _ := e.run("", "history", "body", id, "--grep", "no-such-thing"); code != 1 {
+		t.Error("grep without matches should exit 1")
+	}
+
+	// -o saves all of it, redacted.
+	out := filepath.Join(t.TempDir(), "big.json")
+	e.ok("run", "Big", "-o", out)
+	if data, _ := os.ReadFile(out); len(data) < len(body)-1024 || !bytes.Contains(data, []byte(`"last":true`)) {
+		t.Errorf("-o wrote %d bytes, want about %d", len(data), len(body))
+	}
+
+	// --max-body stops reading, and says so.
+	json.Unmarshal([]byte(e.ok("run", "Big", "--json", "--max-body", "1MB")), &res)
+	if !res.CutAtCap || res.Size != 1<<20 {
+		t.Errorf("--max-body: cut=%v size=%d", res.CutAtCap, res.Size)
+	}
+
+	// history show is cut the same way.
+	var shown struct{ Run runJSON }
+	json.Unmarshal([]byte(e.ok("history", "show", id, "--json")), &shown)
+	if !shown.Run.Partial || shown.Run.Size != int64(len(body)) {
+		t.Errorf("history show: partial=%v size=%d", shown.Run.Partial, shown.Run.Size)
+	}
+
+	// Nothing printed anywhere has the secrets.
+	for _, leak := range []string{testToken, "pw-42"} {
+		if strings.Contains(e.output.String(), leak) {
+			t.Errorf("output leaks %q", leak)
+		}
+		if data, _ := os.ReadFile(out); bytes.Contains(data, []byte(leak)) {
+			t.Errorf("-o file leaks %q", leak)
+		}
 	}
 }

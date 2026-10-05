@@ -18,7 +18,7 @@ func (m *Model) runCaptures(t *tab, resp *core.Response) {
 	if j < 0 || len(m.ws.Requests[j].Captures) == 0 {
 		return
 	}
-	vals := core.EvalCaptures(m.ws.Requests[j].Captures, resp.Body)
+	vals := core.EvalCaptures(m.ws.Requests[j].Captures, resp)
 	envID := m.ws.ActiveEnv
 	if m.mutate(func(w *core.Workspace) error { return w.StoreCaptured(envID, vals) }) {
 		m.flash(core.CapturedSummary(vals))

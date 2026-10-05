@@ -54,6 +54,14 @@ barq env set dev token - --secret         # value from stdin
 barq import openapi.json
 ```
 
+**Large responses.** Bodies are kept whole, in history too, scrubbed of
+secrets. The TUI shows the first 10 MB, and `barq run` prints the first 1 MB
+and says where the rest is. Read it with `barq history body <run-id>` and
+`--jq`, `--grep`, `--lines`, `--bytes` or `--path`, or save it with
+`barq run … -o file`. Reading stops at 1 GB by default (`--max-body`,
+`BARQ_MAX_BODY_MB`, 0 for no limit). History stays under 500 MB per project
+(`BARQ_HISTORY_MB`) by deleting the oldest bodies first and keeping their runs.
+
 To let an agent such as Claude Code use it, add to the project's `CLAUDE.md`:
 
 > Use `barq` for HTTP/API calls in this project. Run `barq ai` first to learn

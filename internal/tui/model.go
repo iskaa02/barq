@@ -436,6 +436,7 @@ func (m *Model) closeTab(i int, force bool) {
 	if t := m.tabs[i]; t.cancel != nil {
 		t.cancel()
 	}
+	m.tabs[i].result.Close()
 	if i != m.active {
 		m.tabs = append(m.tabs[:i], m.tabs[i+1:]...)
 		if i < m.active {
@@ -466,6 +467,14 @@ func (m Model) tabIndex(uid int) int {
 
 // Persist writes the open tabs (the session). Saved requests, folders and
 // environments are written through mutate.
+// Close removes the temporary files holding large response bodies. Call
+// it when the program ends.
+func (m Model) Close() {
+	for _, t := range m.tabs {
+		t.result.Close()
+	}
+}
+
 func (m *Model) Persist() {
 	m.ws.Tabs = m.ws.Tabs[:0]
 	for i, t := range m.tabs {
@@ -779,7 +788,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case responseMsg:
 		i := m.tabIndex(msg.tabUID)
 		if i < 0 {
-			return m, nil // tab was closed
+			msg.resp.Close() // tab was closed
+			return m, nil
 		}
 		t := m.tabs[i]
 		t.loading = false
@@ -789,6 +799,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		t.err = msg.err
 		if msg.err == nil {
+			t.result.Close() // a large body's temporary file
 			t.result = msg.resp
 			t.pretty = msg.pretty
 			t.respY = 0
@@ -811,6 +822,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+
+	case pagerDoneMsg:
+		m.notice = errorStyle.Render("pager failed: " + msg.err.Error() + " — set $PAGER (e.g. export PAGER=less)")
+		return m, nil
 
 	case editorDoneMsg:
 		m.editorDone(msg)

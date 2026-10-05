@@ -11,9 +11,6 @@ import (
 	"time"
 )
 
-// MaxBodySize caps how much of a response body is read into memory.
-const MaxBodySize = 10 << 20 // 10 MiB
-
 var Methods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
 
 type Response struct {
@@ -21,9 +18,13 @@ type Response struct {
 	StatusCode int
 	Proto      string
 	Headers    http.Header
-	Body       []byte
-	Truncated  bool
+	Body       []byte // the whole body, or its first PreviewLimit bytes when Partial
+	Size       int64  // of the whole body
+	CutAtCap   bool   // reading stopped at MaxBody
 	Duration   time.Duration
+
+	bodyFile string // the whole body, when it's too long for memory
+	temp     bool   // bodyFile is a temporary file this response owns
 }
 
 func NormalizeURL(raw string) string {
@@ -73,24 +74,17 @@ func doRequest(ctx context.Context, method, rawURL string, headers http.Header, 
 	}
 	defer res.Body.Close()
 
-	data, err := io.ReadAll(io.LimitReader(res.Body, MaxBodySize+1))
-	if err != nil {
-		return nil, err
-	}
-	truncated := len(data) > MaxBodySize
-	if truncated {
-		data = data[:MaxBodySize]
-	}
-
-	return &Response{
+	resp := &Response{
 		Status:     res.Status,
 		StatusCode: res.StatusCode,
 		Proto:      res.Proto,
 		Headers:    res.Header,
-		Body:       data,
-		Truncated:  truncated,
-		Duration:   time.Since(start),
-	}, nil
+	}
+	if err := readBody(res.Body, resp); err != nil {
+		return nil, err
+	}
+	resp.Duration = time.Since(start)
+	return resp, nil
 }
 
 // PrettyBody indents JSON bodies; anything else is returned as-is.
@@ -106,13 +100,15 @@ func PrettyBody(r *Response) (string, bool) {
 	return string(r.Body), false
 }
 
-func HumanSize(n int) string {
+func HumanSize[T int | int64](n T) string {
 	switch {
 	case n < 1024:
 		return fmt.Sprintf("%d B", n)
 	case n < 1<<20:
 		return fmt.Sprintf("%.1f KB", float64(n)/1024)
-	default:
+	case n < 1<<30:
 		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	default:
+		return fmt.Sprintf("%.1f GB", float64(n)/(1<<30))
 	}
 }

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -72,7 +74,12 @@ func (m Model) rootItems() []paletteItem {
 			m.flashCopy(copyText(ansi.Strip(t.jqOut), "filtered body"))
 			return
 		}
-		m.flashCopy(copyText(string(m.cur().result.Body), "response body"))
+		r := m.cur().result
+		what := "response body"
+		if r.Partial() {
+			what = "first " + core.HumanSize(len(r.Body)) + " of the response body"
+		}
+		m.flashCopy(copyText(string(r.Body), what))
 	})))
 	add(hasResp, cmd("Response", "Find…", "/", do(func(m *Model) { m.openBar(barFind) })))
 	add(hasResp, cmd("Response", "Filter with jq…", "|", do(func(m *Model) { m.openBar(barJQ) })))
@@ -85,6 +92,7 @@ func (m Model) rootItems() []paletteItem {
 	add(hasResp, cmd("Response", "Copy headers", "", do(func(m *Model) {
 		m.flashCopy(copyText(formatHeaders(m.cur().result), "response headers"))
 	})))
+	add(hasResp && m.cur().result.Partial(), cmd("Response", "Open whole body in $PAGER", "", func(m *Model) tea.Cmd { return m.openPager() }))
 	add(hasResp, cmd("Response", "Save body to file…", "", do(func(m *Model) {
 		m.ask(promptSaveResponse, "Save response to:", defaultResponseFile(m.cur().result), 0)
 	})))
@@ -405,12 +413,54 @@ func (m *Model) saveResponse(path string) {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(m.ws.CWD, path)
 	}
-	if err := os.WriteFile(path, t.result.Body, 0o644); err != nil {
+	if err := writeBody(t.result, path); err != nil {
 		m.notice = errorStyle.Render("couldn't save: " + err.Error())
 		return
 	}
-	m.flash(fmt.Sprintf("wrote %s to %s", core.HumanSize(len(t.result.Body)), path))
+	m.flash(fmt.Sprintf("wrote %s to %s", core.HumanSize(t.result.Size), path))
 }
+
+// writeBody saves the whole body, which may be far bigger than what's shown.
+func writeBody(r *core.Response, path string) error {
+	src, err := r.OpenBody()
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(f, src)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// openPager shows the whole body of a large response in $PAGER (less by
+// default), straight from the file holding it.
+func (m *Model) openPager() tea.Cmd {
+	r := m.cur().result
+	if r == nil || r.BodyFile() == "" {
+		return nil
+	}
+	args := []string{"less"}
+	if v := strings.TrimSpace(os.Getenv("PAGER")); v != "" {
+		if a, err := core.ShellSplit(v); err == nil && len(a) > 0 {
+			args = a
+		}
+	}
+	cmd := exec.Command(args[0], append(args[1:], r.BodyFile())...)
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		if err != nil {
+			return pagerDoneMsg{err}
+		}
+		return nil
+	})
+}
+
+type pagerDoneMsg struct{ err error }
 
 func (m *Model) showResponse(tab int) {
 	m.cur().respTab = tab
@@ -430,6 +480,7 @@ func (m *Model) closeWhere(close func(i int) bool) int {
 			if t.cancel != nil {
 				t.cancel()
 			}
+			t.result.Close()
 			n++
 			continue
 		}

@@ -79,10 +79,9 @@ func TestHistoryScrubsSecrets(t *testing.T) {
 		Meta:    HistMeta{URL: "https://x/y?t=tok-123456"},
 		Sent:    Request{URL: "https://x/y?t=tok-123456", Headers: []SavedHeader{{Key: "Authorization", Value: "Bearer tok-123456", Enabled: true}}},
 		Headers: liveHeaders,
-		Body:    []byte(`{"accessToken":"tok-123456"}`),
 	}
-	hideSecretsInRun(e, secrets)
-	all := e.Meta.URL + e.Sent.URL + e.Sent.Headers[0].Value + e.Headers.Get("Set-Cookie") + string(e.Body)
+	hideSecretsInRun(e, secrets) // the body is scrubbed as it's written: see body_test.go
+	all := e.Meta.URL + e.Sent.URL + e.Sent.Headers[0].Value + e.Headers.Get("Set-Cookie")
 	if strings.Contains(all, "tok-123456") {
 		t.Errorf("secret left in history: %s", all)
 	}

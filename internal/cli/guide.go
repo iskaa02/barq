@@ -45,9 +45,10 @@ match case-insensitively and by unique substring. Prefer IDs from --json.
   barq set <request> [edit flags]      change a request
   barq mkdir <folder/…>  ·  barq mv <ref> <folder or />  ·  barq rename <ref> <name>
   barq rm <request>  ·  barq rm -r <folder>
-  barq run <request> [--env E] [--var k=v]… [--capture var=jq]… [--jq F] [-i] [--fail]
+  barq run <request> [--env E] [--var k=v]… [--capture var=jq]… [--jq F] [-i] [-o FILE] [--fail]
   barq run --curl 'curl …'             send without saving
   barq history [request] [-n N]  ·  barq history show <run-id>
+  barq history body <run-id> [--jq F | --grep RE | --lines A:B | --bytes A:B | --path]
   barq env ls | show [E] | use E|none | new E [--use] [--protect|--protect-all] | set E KEY VALUE|- [--secret]
   barq env unset E KEY | rename E NAME | rm E | protect E [--all]
   barq curl <request> [--env E]        curl with secrets kept as {{vars}}
@@ -70,9 +71,23 @@ A capture stores part of each successful response in a variable:
 If a request returns 401, the token has probably expired: run the login
 request again (its capture refreshes {{token}}), then retry.
 
+## Large responses
+barq keeps every body whole in history, but run and history show print at
+most 1 MB of it. When they cut a body, --json has "partial": true and
+"size" is the whole size. Don't print large bodies whole; read what you need:
+  barq history body <run-id> --jq '.items | length'     (bodies up to 128 MB)
+  barq history body <run-id> --grep '"status": *"failed"'   numbered matches
+  barq history body <run-id> --lines 1:50   ·   --bytes 0:4096
+  barq history body <run-id> --path         the file, already redacted, for
+                                            your own tools (jq, rg, head)
+  barq run <request> -o out.json            save the whole body (redacted)
+--jq on run reads the whole body too. Old bodies may be pruned from history
+to save space; the run stays and says so ("body_pruned").
+
 ## Output
 Human-readable by default; --json for structured output:
-  run:  {run_id, status, code, duration_ms, size, headers, body, captured[], redacted}
+  run:  {run_id, status, code, duration_ms, size, headers, body, captured[], redacted,
+         partial, body_file}
   show/new/set: {id, path, method, url, headers[], disabled_params[], body_mode, body, form[], captures[]}
 Exit status: 0 ok, 1 error, 2 bad usage, 3 HTTP >= 400 with --fail.
 `

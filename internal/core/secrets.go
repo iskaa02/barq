@@ -1,7 +1,6 @@
 package core
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -146,13 +145,6 @@ func hideSecrets(s string, secrets []secretValue) string {
 	return s
 }
 
-func hideSecretsBytes(b []byte, secrets []secretValue) []byte {
-	for _, sv := range secrets {
-		b = bytes.ReplaceAll(b, []byte(sv.value), []byte(secretMarker(sv.name)))
-	}
-	return b
-}
-
 func hideSecretsInRequest(r Request, secrets []secretValue) Request {
 	r.URL = hideSecrets(r.URL, secrets)
 	r.Body = hideSecrets(r.Body, secrets)
@@ -184,7 +176,6 @@ func hideSecretsInRun(e *HistEntry, secrets []secretValue) {
 		}
 		e.Headers[k] = vs
 	}
-	e.Body = hideSecretsBytes(e.Body, secrets)
 }
 
 func (w *Workspace) secretWarning() string {

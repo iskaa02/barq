@@ -1,8 +1,10 @@
 package core
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -24,9 +26,10 @@ func addRun(t *testing.T, h *History, key, url string) *HistEntry {
 	r := Request{Method: "GET", URL: url}
 	e := &HistEntry{
 		Meta:    HistMeta{ID: NewID(), Key: key, Time: time.Now(), Method: "GET", URL: url, Code: 200, ReqHash: requestHash(r)},
-		Request: r, Sent: r, Body: []byte(`{"ok":true}`),
+		Request: r, Sent: r,
 	}
-	if err := h.add(e); err != nil {
+	body := func(w io.Writer) error { _, err := io.WriteString(w, `{"ok":true}`); return err }
+	if err := h.add(e, body); err != nil {
 		t.Fatal(err)
 	}
 	return e
@@ -106,22 +109,42 @@ func TestHistoryPruneBySize(t *testing.T) {
 	defer func() { histMaxBytes = old }()
 
 	big := make([]byte, 1<<20)
+	write := func(w io.Writer) error { _, err := w.Write(big); return err }
 	var ids []string
 	for i := 0; i < 5; i++ {
-		e := &HistEntry{Meta: HistMeta{ID: NewID(), Key: "k", Size: len(big)}, Body: big}
-		if err := h.add(e); err != nil {
+		e := &HistEntry{Meta: HistMeta{ID: NewID(), Key: "k", Size: int64(len(big))}}
+		if err := h.add(e, write); err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, e.Meta.ID)
 	}
-	if n := len(h.Index); n < 2 || n > 3 {
-		t.Errorf("kept %d runs of 1 MB under a 3 MB budget", n)
+	// Bodies go first; the runs themselves stay.
+	if n := len(h.Index); n != 5 {
+		t.Errorf("kept %d runs, want all 5 (only bodies pruned)", n)
+	}
+	pruned := 0
+	for _, m := range h.Index {
+		if m.BodyPruned {
+			pruned++
+		}
+	}
+	if pruned < 2 || pruned > 3 {
+		t.Errorf("pruned %d bodies of 1 MB under a 3 MB budget", pruned)
 	}
 	if _, err := os.Stat(h.bodyPath(ids[0])); !os.IsNotExist(err) {
 		t.Error("oldest body file should be gone")
 	}
+	if e, err := h.Load(ids[0]); err != nil || !e.Meta.BodyPruned || len(e.Body) != 0 {
+		t.Errorf("a pruned run should load without its body: %v", err)
+	}
 	if e, err := h.Load(ids[4]); err != nil || len(e.Body) != len(big) {
 		t.Errorf("newest run should load with its body: %v", err)
+	}
+
+	// The pruning is recorded in the index, for other processes too.
+	h2, _ := OpenHistory(&Workspace{Path: strings.TrimSuffix(h.dir, ".history") + ".json"})
+	if !h2.Index[0].BodyPruned {
+		t.Error("reopened index should know the body was pruned")
 	}
 }
 

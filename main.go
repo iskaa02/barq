@@ -82,6 +82,7 @@ func main() {
 	final, err := p.Run()
 	if fm, ok := final.(tui.Model); ok {
 		fm.Persist()
+		fm.Close()
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
