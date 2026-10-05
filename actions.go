@@ -76,7 +76,7 @@ func (m model) rootItems() []paletteItem {
 	add(hasResp, cmd("Response", "Find…", "/", do(func(m *model) { m.openBar(barFind) })))
 	add(hasResp, cmd("Response", "Filter with jq…", "|", do(func(m *model) { m.openBar(barJQ) })))
 	add(t.jq != "", cmd("Response", "Clear jq filter", "", do(func(m *model) { m.setJQ("") })))
-	add(hasResp && m.ws.activeEnv() != nil, cmd("Response", "Set variable from response…", "", do(func(m *model) {
+	add(hasResp && m.ws.currentEnv() != nil, cmd("Response", "Set variable from response…", "", do(func(m *model) {
 		m.ask(promptSetVar, "Set variable (name = jq filter):", "", 0)
 		m.prompt.input.Placeholder = "token = .access_token"
 	})))
@@ -126,7 +126,7 @@ func (m model) rootItems() []paletteItem {
 		next: &paletteStep{title: "Move “" + m.tabName(m.active) + "” to", placeholder: "Folder…", items: folderItems}})
 	if saved {
 		n := len(m.ws.Requests[m.ws.find(t.savedID)].Captures)
-		add(m.ws.activeEnv() != nil, cmd("Saved", "Add capture… (store part of each response in a variable)", fmt.Sprintf("%d set", n), do(func(m *model) {
+		add(m.ws.currentEnv() != nil, cmd("Saved", "Add capture… (store part of each response in a variable)", fmt.Sprintf("%d set", n), do(func(m *model) {
 			m.ask(promptAddCapture, "Capture (name = jq filter):", "", 0)
 			m.prompt.input.Placeholder = "token = .data.accessToken"
 		})))

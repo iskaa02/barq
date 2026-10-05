@@ -61,7 +61,7 @@ func (w *workspace) findEnv(id string) int {
 	return slices.IndexFunc(w.Environments, func(e environment) bool { return e.ID == id })
 }
 
-func (w *workspace) activeEnv() *environment {
+func (w *workspace) currentEnv() *environment {
 	if i := w.findEnv(w.ActiveEnv); i >= 0 {
 		return &w.Environments[i]
 	}
@@ -191,7 +191,7 @@ func (m *model) switchEnv(id string) {
 	if !m.mutate(func(w *workspace) error { return w.useEnv(id) }) {
 		return
 	}
-	if env := m.ws.activeEnv(); env != nil {
+	if env := m.ws.currentEnv(); env != nil {
 		m.flash("environment: " + env.Name)
 	} else {
 		m.flash("no environment")
@@ -214,7 +214,7 @@ func (m *model) deleteEnv(id string) {
 }
 
 func (m *model) duplicateEnv() {
-	env := m.ws.activeEnv()
+	env := m.ws.currentEnv()
 	if env == nil {
 		return
 	}
@@ -232,7 +232,7 @@ func (m *model) duplicateEnv() {
 
 // setVar sets a variable in the active environment, adding it if needed.
 func (m *model) setVar(name, value string) {
-	env := m.ws.activeEnv()
+	env := m.ws.currentEnv()
 	if env == nil {
 		return
 	}
@@ -249,7 +249,7 @@ type envEditor struct {
 }
 
 func (m *model) openEnvEditor() {
-	env := m.ws.activeEnv()
+	env := m.ws.currentEnv()
 	if env == nil {
 		m.ask(promptNewEnv, "New environment name:", "dev", 0)
 		return
@@ -378,7 +378,7 @@ func envItems(m model) []paletteItem {
 var envStep = paletteStep{title: "Switch environment", placeholder: "Environment…", items: envItems}
 
 func (m model) envCommands() []paletteItem {
-	env := m.ws.activeEnv()
+	env := m.ws.currentEnv()
 	cur := "none"
 	if env != nil {
 		cur = env.Name
@@ -420,7 +420,7 @@ func (m model) envCommands() []paletteItem {
 
 // envIndicator is the title bar's environment label.
 func (m model) envIndicator() string {
-	if env := m.ws.activeEnv(); env != nil {
+	if env := m.ws.currentEnv(); env != nil {
 		lock := ""
 		if env.Protected {
 			lock = " 🔒"

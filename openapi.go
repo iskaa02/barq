@@ -428,7 +428,7 @@ func importOpenAPI(ws *workspace, spec *omap) (importResult, error) {
 		ensureEnv(ws, res.Title, savedHeader{Key: "baseUrl", Value: "http://localhost", Enabled: true}, schemes)
 		res.Envs = append(res.Envs, res.Title)
 	}
-	if ws.activeEnv() == nil {
+	if ws.currentEnv() == nil {
 		ws.ActiveEnv = envIDByName(ws, res.Envs[0])
 	}
 

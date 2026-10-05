@@ -316,7 +316,7 @@ func (c *cli) openEnv(pos []string, i int) (*environment, error) {
 	if len(pos) > i {
 		return c.ws.envByRef(pos[i])
 	}
-	if env := c.ws.activeEnv(); env != nil {
+	if env := c.ws.currentEnv(); env != nil {
 		return env, nil
 	}
 	return nil, fmt.Errorf("no active environment; name one (see `barq env ls`)")

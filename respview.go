@@ -455,7 +455,7 @@ func (m *model) setVarFromResponse(spec string) {
 	if len(shown) > 40 {
 		shown = shown[:40] + "…"
 	}
-	m.flash(fmt.Sprintf("set {{%s}} = %s in “%s”", name, shown, m.ws.activeEnv().Name))
+	m.flash(fmt.Sprintf("set {{%s}} = %s in “%s”", name, shown, m.ws.currentEnv().Name))
 }
 
 // Input bar -------------------------------------------------------------------

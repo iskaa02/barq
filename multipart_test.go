@@ -190,16 +190,16 @@ func TestSendMultipart(t *testing.T) {
 	r := request{Method: "POST", URL: srv.URL, BodyMode: bodyForm,
 		Headers: []savedHeader{{Key: "Content-Type", Value: "multipart/form-data", Enabled: true}}, // no boundary: replaced
 		Form:    []savedHeader{{Key: "file", Value: "@a.png", Enabled: true}, {Key: "n", Value: "1", Enabled: true}}}
-	msg := sendRequest(context.Background(), 1, r, cwd)().(responseMsg)
-	if msg.err != nil || msg.resp.StatusCode != 201 {
-		t.Fatalf("send: %v %+v", msg.err, msg.resp)
+	resp, err := runRequest(context.Background(), r, cwd)
+	if err != nil || resp.StatusCode != 201 {
+		t.Fatalf("send: %v %+v", err, resp)
 	}
 	if len(got) != 2 || got[0].filename != "a.png" || got[0].ctype != "image/png" || got[1].body != "1" {
 		t.Errorf("server got %+v", got)
 	}
 
 	r.Form[0].Value = "@gone.png"
-	if msg := sendRequest(context.Background(), 1, r, cwd)().(responseMsg); msg.err == nil || !strings.Contains(msg.err.Error(), `form field "file"`) {
-		t.Errorf("missing file should fail before sending: %v", msg.err)
+	if _, err := runRequest(context.Background(), r, cwd); err == nil || !strings.Contains(err.Error(), `form field "file"`) {
+		t.Errorf("missing file should fail before sending: %v", err)
 	}
 }
