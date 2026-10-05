@@ -7,6 +7,8 @@ seeing your secrets**.
 Requests, folders, environments and run history are saved per project
 directory in `~/.barq`, never inside the project.
 
+![barq demo: log in, list users with the captured token, filter with jq, browse runs](assets/demo.gif)
+
 ## Install
 
 Requires Go 1.24 or newer.
