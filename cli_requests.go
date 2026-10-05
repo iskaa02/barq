@@ -312,7 +312,7 @@ func cmdShow(c *cli, args []string) error {
 
 func (c *cli) checkReveal() error {
 	if c.reveal {
-		return c.confirm("Showing secret values", "reveal")
+		return c.confirm("Showing secret values")
 	}
 	return nil
 }

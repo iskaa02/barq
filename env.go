@@ -23,8 +23,35 @@ type environment struct {
 	Name string        `json:"name"`
 	Vars []savedHeader `json:"vars,omitempty"`
 	// Protected environments (e.g. production) can't be used from the CLI
-	// without confirming in an interactive terminal.
-	Protected bool `json:"protected,omitempty"`
+	// without confirming in an interactive terminal. Only requests that can
+	// change something need confirming, unless ProtectReads is set too.
+	Protected    bool `json:"protected,omitempty"`
+	ProtectReads bool `json:"protectReads,omitempty"`
+}
+
+// needsConfirm reports whether the CLI must confirm sending method here.
+func (e *environment) needsConfirm(method string) bool {
+	return e != nil && e.Protected && (e.ProtectReads || !safeMethod(method))
+}
+
+// safeMethod reports whether method only reads (an empty method is GET).
+func safeMethod(method string) bool {
+	switch strings.ToUpper(strings.TrimSpace(method)) {
+	case "", "GET", "HEAD", "OPTIONS":
+		return true
+	}
+	return false
+}
+
+// protection names how an environment is protected, for display.
+func (e environment) protection() string {
+	switch {
+	case !e.Protected:
+		return ""
+	case e.ProtectReads:
+		return "all"
+	}
+	return "writes"
 }
 
 func (w *workspace) findEnv(id string) int {
@@ -273,7 +300,7 @@ func (m model) envEditorView() string {
 	}
 	title := titleStyle.Render("Environment: "+name) + mutedStyle.Render("  use as {{variable}} in URL, headers and body")
 	if i := m.ws.findEnv(m.envEdit.envID); i >= 0 && m.ws.Environments[i].Protected {
-		title += lipgloss.NewStyle().Foreground(colorYellow).Render("  🔒 protected")
+		title += lipgloss.NewStyle().Foreground(colorYellow).Render("  🔒 protected (" + m.ws.Environments[i].protection() + ")")
 	}
 	footer := mutedStyle.Render("enter next cell • ctrl+l secret • ctrl+t toggle • ctrl+d delete • esc/ctrl+s save & close")
 	body := lipgloss.JoinVertical(lipgloss.Left, title, "", m.envEdit.table.View())
@@ -373,12 +400,20 @@ func (m model) envCommands() []paletteItem {
 				m.prompt.id = id
 			}),
 			cmd("Duplicate", "", (*model).duplicateEnv),
-			cmd(protectTitle(env.Protected), "", func(m *model) { m.setProtected(id, !env.Protected) }),
 			cmd("Delete", "", func(m *model) {
 				m.ask(promptDeleteEnv, fmt.Sprintf("Delete environment “%s”?", name), "", 0)
 				m.prompt.id = id
 			}),
 		)
+		if env.protection() != "writes" {
+			items = append(items, cmd("Protect writes (the CLI confirms POST, PUT, …)", "", func(m *model) { m.setProtected(id, true, false) }))
+		}
+		if env.protection() != "all" {
+			items = append(items, cmd("Protect all requests (the CLI confirms every send)", "", func(m *model) { m.setProtected(id, true, true) }))
+		}
+		if env.Protected {
+			items = append(items, cmd("Unprotect", "", func(m *model) { m.setProtected(id, false, false) }))
+		}
 	}
 	return items
 }
@@ -399,27 +434,23 @@ func (m model) envIndicator() string {
 	return mutedStyle.Render("no environment ")
 }
 
-func protectTitle(protected bool) string {
-	if protected {
-		return "Unprotect"
-	}
-	return "Protect (the CLI must then confirm)"
-}
-
-func (m *model) setProtected(id string, protect bool) {
+func (m *model) setProtected(id string, protect, reads bool) {
 	if !m.mutate(func(w *workspace) error {
 		env, err := w.env(id)
 		if err == nil {
-			env.Protected = protect
+			env.Protected, env.ProtectReads = protect, protect && reads
 		}
 		return err
 	}) {
 		return
 	}
 	env, _ := m.ws.env(id)
-	if protect {
-		m.flash("protected “" + env.Name + "”: the CLI must confirm before using it")
-	} else {
+	switch env.protection() {
+	case "writes":
+		m.flash("protected “" + env.Name + "”: the CLI must confirm requests that can change something")
+	case "all":
+		m.flash("protected “" + env.Name + "”: the CLI must confirm every request")
+	default:
 		m.flash("unprotected “" + env.Name + "”")
 	}
 }

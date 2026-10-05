@@ -28,7 +28,10 @@ same project; your changes appear there within a second.
 - When editing a body that shows «redacted», keep the marker as is: barq
   restores the real value. Don't try --reveal; it needs a human.
 - Protected environments (often production) need a human to confirm in a
-  terminal; runs there fail for you. Use another environment or ask.
+  terminal. GET, HEAD and OPTIONS usually go through; anything that can
+  change something (POST, PUT, PATCH, DELETE…) fails for you, and so does
+  everything in environments protected with --all. Use another
+  environment or ask.
 
 ## References
 Requests and folders are named by ID or path, e.g. "Auth/Login". Paths
@@ -45,8 +48,8 @@ match case-insensitively and by unique substring. Prefer IDs from --json.
   barq run <request> [--env E] [--var k=v]… [--capture var=jq]… [--jq F] [-i] [--fail]
   barq run --curl 'curl …'             send without saving
   barq history [request] [-n N]  ·  barq history show <run-id>
-  barq env ls | show [E] | use E|none | new E [--use] | set E KEY VALUE|- [--secret]
-  barq env unset E KEY | rename E NAME | rm E | protect E
+  barq env ls | show [E] | use E|none | new E [--use] [--protect|--protect-all] | set E KEY VALUE|- [--secret]
+  barq env unset E KEY | rename E NAME | rm E | protect E [--all]
   barq curl <request> [--env E]        curl with secrets kept as {{vars}}
   barq import <openapi.json|yaml|url> [--dry-run]
 

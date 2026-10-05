@@ -118,18 +118,60 @@ func stdioIsTerminal() bool {
 	return term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd())
 }
 
-// confirm asks a person at an interactive terminal to type word. Agents and
-// scripts have no terminal, so they're refused without being asked.
-func (c *cli) confirm(what, word string) error {
+// confirm shows what is about to happen, with any details, and asks the
+// person at the terminal to press y. Agents and scripts have no terminal,
+// so they're refused without being asked.
+func (c *cli) confirm(what string, details ...string) error {
 	if !c.interactive() {
 		return fmt.Errorf("%s needs confirmation from a person at an interactive terminal", what)
 	}
-	fmt.Fprintf(c.err, "%s — type %q to continue: ", what, word)
-	line, _ := bufio.NewReader(c.in).ReadString('\n')
-	if strings.TrimSpace(line) != word {
+	var b strings.Builder
+	b.WriteString("⚠ " + what + "\n")
+	for _, d := range details {
+		b.WriteString("  " + d + "\n")
+	}
+	b.WriteString("Continue? [y/N] ")
+	key, err := askKey(b.String(), c.in, c.err)
+	if err != nil {
+		return err
+	}
+	if key != 'y' && key != 'Y' {
 		return errors.New("cancelled")
 	}
 	return nil
+}
+
+// askKey shows prompt and returns the key pressed (tests replace it).
+var askKey = ttyAskKey
+
+// ttyAskKey asks on the controlling terminal rather than stdin and stderr,
+// so neither piped input nor redirected output can answer or hide it. One
+// keypress is enough; anything but y, including Ctrl-C, cancels. Without
+// a /dev/tty (Windows) it falls back to a line on stdin.
+func ttyAskKey(prompt string, in io.Reader, errOut io.Writer) (byte, error) {
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		fmt.Fprint(errOut, prompt)
+		line, _ := bufio.NewReader(in).ReadString('\n')
+		if line = strings.TrimSpace(line); line == "" {
+			return 0, nil
+		}
+		return line[0], nil
+	}
+	defer tty.Close()
+	fmt.Fprint(tty, prompt) // before raw mode, so \n still starts a line
+	state, err := term.MakeRaw(tty.Fd())
+	if err != nil {
+		return 0, err
+	}
+	key := make([]byte, 1)
+	_, err = tty.Read(key)
+	_ = term.Restore(tty.Fd(), state)
+	if key[0] >= ' ' && key[0] < 0x7f {
+		fmt.Fprintf(tty, "%c", key[0])
+	}
+	fmt.Fprint(tty, "\r\n")
+	return key[0], err
 }
 
 // Flags -------------------------------------------------------------------------

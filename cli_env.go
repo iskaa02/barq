@@ -20,11 +20,12 @@ type envJSON struct {
 	Name      string       `json:"name"`
 	Active    bool         `json:"active"`
 	Protected bool         `json:"protected"`
+	Protects  string       `json:"protects,omitempty"` // "writes" or "all"
 	Vars      []envVarJSON `json:"vars,omitempty"`
 }
 
 func (c *cli) envOut(env environment, withVars bool) envJSON {
-	out := envJSON{ID: env.ID, Name: env.Name, Active: env.ID == c.ws.ActiveEnv, Protected: env.Protected}
+	out := envJSON{ID: env.ID, Name: env.Name, Active: env.ID == c.ws.ActiveEnv, Protected: env.Protected, Protects: env.protection()}
 	if withVars {
 		out.Vars = []envVarJSON{}
 		for _, v := range env.Vars {
@@ -125,9 +126,10 @@ func cmdEnv(c *cli, args []string) error {
 		return c.envDone(id, "using")
 
 	case "new":
-		protect := fs.Bool("protect", false, "require confirmation before the CLI uses it")
+		protect := fs.Bool("protect", false, "require confirmation before the CLI sends requests that can change something")
+		protectAll := fs.Bool("protect-all", false, "require confirmation before the CLI sends any request")
 		use := fs.Bool("use", false, "make it the active environment")
-		pos, err := c.parse(fs, args, 1, 1, "<name> [--protect] [--use]")
+		pos, err := c.parse(fs, args, 1, 1, "<name> [--protect | --protect-all] [--use]")
 		if err != nil {
 			return err
 		}
@@ -140,7 +142,8 @@ func cmdEnv(c *cli, args []string) error {
 		var id string
 		if err := c.mutate(func(w *workspace) error {
 			id = w.addEnv(pos[0], nil)
-			w.Environments[w.findEnv(id)].Protected = *protect
+			e := &w.Environments[w.findEnv(id)]
+			e.Protected, e.ProtectReads = *protect || *protectAll, *protectAll
 			if *use || w.ActiveEnv == "" {
 				w.ActiveEnv = id
 			}
@@ -152,8 +155,15 @@ func cmdEnv(c *cli, args []string) error {
 
 	case "rm", "rename", "protect", "unprotect":
 		want, usageText := 1, "<environment>"
-		if sub == "rename" {
+		switch sub {
+		case "rename":
 			want, usageText = 2, "<environment> <new name>"
+		case "protect":
+			usageText = "<environment> [--all]"
+		}
+		all := new(bool)
+		if sub == "protect" {
+			all = fs.Bool("all", false, "confirm every request, not just ones that can change something")
 		}
 		pos, err := c.parse(fs, args, want, want, usageText)
 		if err != nil {
@@ -166,9 +176,11 @@ func cmdEnv(c *cli, args []string) error {
 		id, name := env.ID, env.Name
 		switch {
 		case sub == "unprotect" && env.Protected:
-			err = c.confirm(fmt.Sprintf("Unprotecting %q lets agents use it without asking", name), "yes")
+			err = c.confirm(fmt.Sprintf("Unprotecting %q lets agents use it without asking", name))
+		case sub == "protect" && env.ProtectReads && !*all:
+			err = c.confirm(fmt.Sprintf("Protecting only writes in %q lets agents send GET, HEAD and OPTIONS there without asking", name))
 		case sub == "rm" && env.Protected:
-			err = c.confirm(fmt.Sprintf("Deleting the protected environment %q", name), "yes")
+			err = c.confirm(fmt.Sprintf("Deleting the protected environment %q", name))
 		}
 		if err != nil {
 			return err
@@ -183,6 +195,7 @@ func cmdEnv(c *cli, args []string) error {
 			e, err := w.env(id)
 			if err == nil {
 				e.Protected = sub == "protect"
+				e.ProtectReads = e.Protected && *all
 			}
 			return err
 		}); err != nil {
@@ -194,6 +207,10 @@ func cmdEnv(c *cli, args []string) error {
 			}
 			c.printf("deleted environment %s\n", name)
 			return nil
+		}
+		if sub == "protect" {
+			e, _ := c.ws.env(id)
+			return c.envDone(id, "protected ("+e.protection()+")")
 		}
 		return c.envDone(id, sub+"d")
 
@@ -225,7 +242,7 @@ func cmdEnv(c *cli, args []string) error {
 			current = env.Vars[i]
 		}
 		if *notSecret && isSecret(current) {
-			if err := c.confirm(fmt.Sprintf("Marking {{%s}} not secret makes its value visible to agents", key), "yes"); err != nil {
+			if err := c.confirm(fmt.Sprintf("Marking {{%s}} not secret makes its value visible to agents", key)); err != nil {
 				return err
 			}
 		}

@@ -167,7 +167,7 @@ func TestCLIRefusesWithoutAPerson(t *testing.T) {
 	srv := apiServer(t)
 	defer srv.Close()
 	e := newCLIEnv(t)
-	e.ok("env", "new", "prod", "--protect", "--use")
+	e.ok("env", "new", "prod", "--protect-all", "--use")
 	e.ok("env", "set", "prod", "baseUrl", srv.URL)
 	e.ok("env", "set", "prod", "token", testToken)
 	e.ok("new", "Me", "--url", "{{baseUrl}}/me")
@@ -177,22 +177,69 @@ func TestCLIRefusesWithoutAPerson(t *testing.T) {
 		{"show", "Me", "--reveal"},                          // reveal
 		{"env", "show", "prod", "--reveal"},                 //
 		{"env", "unprotect", "prod"},                        // weaken protection
+		{"env", "protect", "prod"},                          // only writes now
 		{"env", "set", "prod", "token", "x", "--no-secret"}, // expose a secret
 	} {
-		code, _, errOut := e.run("yes\n", args...)
+		code, _, errOut := e.run("y\n", args...)
 		if code != 1 || !strings.Contains(errOut, "interactive terminal") {
 			t.Errorf("%v should be refused: %d %s", args, code, errOut)
 		}
 	}
 
-	// With a person at a terminal who confirms, it goes through.
+	// With a person at a terminal who presses y, it goes through, after
+	// being shown the real target with the secret hidden.
 	isInteractive = func() bool { return true }
 	defer func() { isInteractive = stdioIsTerminal }()
-	if code, out, errOut := e.run("yes\n", "run", "Me", "--var", "token="+testToken); code != 0 || !strings.Contains(out, "401") && !strings.Contains(out, "200") {
+	var prompt string
+	answer := byte('y')
+	askKey = func(p string, _ io.Reader, _ io.Writer) (byte, error) { prompt = p; return answer, nil }
+	defer func() { askKey = ttyAskKey }()
+	e.ok("set", "Me", "--url", "{{baseUrl}}/me?api_key={{token}}")
+	if code, out, errOut := e.run("", "run", "Me"); code != 0 || !strings.Contains(out, "401") {
 		t.Errorf("confirmed run: %d %s %s", code, out, errOut)
 	}
-	if code, _, _ := e.run("nope\n", "env", "unprotect", "prod"); code != 1 {
-		t.Error("a wrong confirmation word must cancel")
+	if !strings.Contains(prompt, "GET "+srv.URL+"/me?api_key=") || strings.Contains(prompt, testToken) {
+		t.Errorf("prompt should show the real URL without the secret: %q", prompt)
+	}
+	answer = 'n'
+	if code, _, _ := e.run("", "env", "unprotect", "prod"); code != 1 {
+		t.Error("anything but y must cancel")
+	}
+}
+
+func TestProtectedWritesOnly(t *testing.T) {
+	srv := apiServer(t)
+	defer srv.Close()
+	e := newCLIEnv(t)
+	e.ok("env", "new", "prod", "--protect", "--use")
+	e.ok("env", "set", "prod", "baseUrl", srv.URL)
+	e.ok("new", "Health", "--url", "{{baseUrl}}/health")
+	e.ok("new", "Login", "--method", "POST", "--url", "{{baseUrl}}/login", "--body", `{"a":1}`)
+
+	// Reads go through without a person; writes don't.
+	if code, out, errOut := e.run("", "run", "Health"); code != 0 || !strings.Contains(out, "404") {
+		t.Errorf("GET in a writes-protected environment: %d %s %s", code, out, errOut)
+	}
+	if code, _, errOut := e.run("", "run", "Login"); code != 1 || !strings.Contains(errOut, "interactive terminal") {
+		t.Errorf("POST should be refused: %d %s", code, errOut)
+	}
+
+	isInteractive = func() bool { return true }
+	defer func() { isInteractive = stdioIsTerminal }()
+	var prompt string
+	askKey = func(p string, _ io.Reader, _ io.Writer) (byte, error) { prompt = p; return 'y', nil }
+	defer func() { askKey = ttyAskKey }()
+	if code, _, errOut := e.run("", "run", "Login"); code != 0 {
+		t.Errorf("confirmed POST: %d %s", code, errOut)
+	}
+	if !strings.Contains(prompt, "POST "+srv.URL+"/login") || !strings.Contains(prompt, "body: 7 B") {
+		t.Errorf("prompt: %q", prompt)
+	}
+
+	var env envJSON
+	json.Unmarshal([]byte(e.ok("env", "protect", "prod", "--all", "--json")), &env)
+	if env.Protects != "all" {
+		t.Errorf("protects: %+v", env)
 	}
 }
 

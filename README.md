@@ -71,8 +71,21 @@ To let an agent such as Claude Code use it, add to the project's `CLAUDE.md`:
   for a person at an interactive terminal.
 - History on disk is scrubbed the same way.
 - Environments can be **protected** (OpenAPI imports protect production).
-  The CLI won't send requests in a protected environment, unprotect it, or
-  make a secret variable visible without confirmation at a terminal.
+  In a protected environment the CLI asks a person at the terminal before
+  sending anything that can change something (POST, PUT, PATCH, DELETE…);
+  GET, HEAD and OPTIONS go through. `barq env protect prod --all` asks
+  before every request. The prompt shows the real method and URL, with
+  secrets hidden, and one keypress answers it:
+
+  ```
+  ⚠ Sending Delete user in the protected environment "prod"
+    DELETE https://api.example.com/users/42
+  Continue? [y/N]
+  ```
+
+  It's read from the terminal itself, so piped input can't answer it.
+  Unprotecting an environment or making a secret variable visible needs
+  the same confirmation.
 
 **Limits.** Redaction keeps secrets out of what barq prints and stores. It
 can't stop an agent from deliberately sending `{{token}}` to a server it

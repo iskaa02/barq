@@ -88,11 +88,6 @@ func cmdRun(c *cli, args []string) error {
 		return err
 	}
 	env, _ := c.ws.env(envID)
-	if env != nil && env.Protected {
-		if err := c.confirm(fmt.Sprintf("Sending %s %s in the protected environment %q", typed.Method, name, env.Name), "yes"); err != nil {
-			return err
-		}
-	}
 	overrides := map[string]string{}
 	for _, v := range vars {
 		k, val, err := splitKV(v, "=", "--var")
@@ -104,6 +99,11 @@ func cmdRun(c *cli, args []string) error {
 	sent, missing := c.ws.resolve(envID, typed, overrides)
 	if len(missing) > 0 {
 		return fmt.Errorf("undefined variable(s): {{%s}}; set them with `barq env set` or --var", strings.Join(missing, "}}, {{"))
+	}
+	if env.needsConfirm(sent.Method) {
+		if err := c.confirm(fmt.Sprintf("Sending %s in the protected environment %q", name, env.Name), c.sendSummary(sent)...); err != nil {
+			return err
+		}
 	}
 
 	// Send, record, capture.
@@ -146,6 +146,29 @@ func cmdRun(c *cli, args []string) error {
 		return exitCode(3)
 	}
 	return nil
+}
+
+// sendSummary describes a resolved request for a person to confirm:
+// method, the real URL (secrets still hidden) and what goes in the body.
+func (c *cli) sendSummary(r request) []string {
+	method := strings.ToUpper(r.Method)
+	if method == "" {
+		method = "GET"
+	}
+	lines := []string{method + " " + c.rd.url(normalizeURL(r.URL), false)}
+	switch {
+	case r.BodyMode == bodyForm:
+		n := 0
+		for _, f := range r.Form {
+			if f.Enabled {
+				n++
+			}
+		}
+		lines = append(lines, fmt.Sprintf("body: form with %d field(s)", n))
+	case r.Body != "":
+		lines = append(lines, "body: "+humanSize(len(r.Body)))
+	}
+	return lines
 }
 
 // runOut builds the printable result of a response.
