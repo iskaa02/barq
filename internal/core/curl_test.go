@@ -105,3 +105,41 @@ func TestParseCurlErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestParseCurlCmd(t *testing.T) {
+	// Chrome's "Copy as cURL (cmd)".
+	cmd := "curl --url ^\"https://example.com/boards/6ab4/import-excel?q=a^%^20b^\" ^\r\n" +
+		"  -X ^\"POST^\" ^\r\n" +
+		"  -H ^\"accept: application/json, text/plain, */*^\" ^\r\n" +
+		"  -H ^\"sec-ch-ua: ^\\^\"Not A^(Brand^\\^\";v=^\\^\"99^\\^\"^\" ^\r\n" +
+		"  -H ^\"user-agent: Mozilla/5.0 ^(Windows NT 10.0; Win64; x64^)^\" ^\r\n" +
+		"  --data-raw ^\"^{^\\^\"a^\\^\":^\\^\"x ^& y^\\^\"^}^\" ^\r\n"
+	got, _, err := ParseCurl(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := curlRequest{
+		Method: "POST",
+		URL:    "https://example.com/boards/6ab4/import-excel?q=a%20b",
+		Headers: []HeaderRow{
+			{Key: "accept", Value: "application/json, text/plain, */*", Enabled: true},
+			{Key: "sec-ch-ua", Value: `"Not A(Brand";v="99"`, Enabled: true},
+			{Key: "user-agent", Value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", Enabled: true},
+			{Key: "Content-Type", Value: "application/x-www-form-urlencoded", Enabled: true},
+		},
+		Body: `{"a":"x & y"}`,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got  %+v\nwant %+v", got, want)
+	}
+
+	// The same, typed by hand: plain quotes, and newlines flattened by a
+	// single-line input.
+	got, _, err = ParseCurl(`curl "https://example.com/x" ^ -H "a: \"b\""`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.URL != "https://example.com/x" || len(got.Headers) != 1 || got.Headers[0].Value != `"b"` {
+		t.Errorf("got %+v", got)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -161,6 +162,100 @@ func ShellSplit(s string) ([]string, error) {
 	return args, nil
 }
 
+// cmdStyle matches what only a Windows cmd.exe command has: a line ending in
+// a ^ continuation, or an argument opened with ^" (Chrome's "Copy as cURL
+// (cmd)" wraps every argument that way).
+var cmdStyle = regexp.MustCompile(`\^\r?\n|\^\s*$|(^|\s)\^"`)
+
+// CmdSplit splits a cmd.exe command line: first cmd's own escaping (^ makes
+// the next character literal, ^ at a line end continues the line, "..." turns
+// ^ off), then the Windows argument rules, where "..." groups and \" is a
+// literal quote.
+func CmdSplit(s string) ([]string, error) {
+	var line strings.Builder
+	quoted := false
+	r := []rune(s)
+	for i := 0; i < len(r); i++ {
+		c := r[i]
+		switch {
+		case c == '"':
+			quoted = !quoted
+			line.WriteRune(c)
+		case c == '^' && !quoted:
+			if i+1 < len(r) && r[i+1] == '\r' {
+				i++
+			}
+			if i+1 < len(r) && r[i+1] == '\n' {
+				// A continuation: the newline goes, the next character is literal.
+				i++
+			}
+			if i+1 < len(r) {
+				i++
+				line.WriteRune(r[i])
+			}
+		default:
+			line.WriteRune(c)
+		}
+	}
+
+	var (
+		args    []string
+		cur     strings.Builder
+		inToken bool
+	)
+	quoted = false
+	r = []rune(line.String())
+	for i := 0; i < len(r); i++ {
+		c := r[i]
+		switch {
+		case (c == ' ' || c == '\t' || c == '\n' || c == '\r') && !quoted:
+			if inToken {
+				args = append(args, cur.String())
+				cur.Reset()
+				inToken = false
+			}
+		case c == '\\':
+			n := 0
+			for i < len(r) && r[i] == '\\' {
+				n++
+				i++
+			}
+			if i < len(r) && r[i] == '"' {
+				// 2n backslashes and a quote: n backslashes, then the quote
+				// toggles; 2n+1: n backslashes and a literal quote.
+				cur.WriteString(strings.Repeat(`\`, n/2))
+				if n%2 == 1 {
+					cur.WriteRune('"')
+				} else {
+					i--
+				}
+			} else {
+				cur.WriteString(strings.Repeat(`\`, n))
+				i--
+			}
+			inToken = true
+		case c == '"':
+			inToken = true
+			if quoted && i+1 < len(r) && r[i+1] == '"' {
+				cur.WriteRune('"')
+				i++
+				continue
+			}
+			quoted = !quoted
+		default:
+			cur.WriteRune(c)
+			inToken = true
+		}
+	}
+	if quoted {
+		return nil, errors.New(`unterminated " quote`)
+	}
+	if inToken {
+		args = append(args, cur.String())
+	}
+	return args, nil
+}
+
 // Short options mapped to the long names handled below.
 var curlShort = map[byte]string{
 	'X': "request", 'H': "header", 'd': "data", 'u': "user", 'A': "user-agent",
@@ -189,11 +284,15 @@ var curlLongArg = map[string]bool{
 	"pinnedpubkey": true, "tls-max": true, "dump-header": true, "time-cond": true,
 }
 
-// ParseCurl turns a curl command line into a request. Warnings describe
-// options that were understood but can't be represented.
+// ParseCurl turns a curl command line, POSIX or Windows cmd, into a request.
+// Warnings describe options that were understood but can't be represented.
 func ParseCurl(cmd string) (curlRequest, []string, error) {
 	var req curlRequest
-	args, err := ShellSplit(cmd)
+	split := ShellSplit
+	if cmdStyle.MatchString(cmd) {
+		split = CmdSplit
+	}
+	args, err := split(cmd)
 	if err != nil {
 		return req, nil, err
 	}
