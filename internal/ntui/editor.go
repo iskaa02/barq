@@ -263,7 +263,8 @@ func (a *App) rescan() {
 	a.snapshotPickerFiles()
 }
 
-// createFile makes a new .http file from name (relative to the project) and opens it.
+// createFile makes a new .http file from name (relative to the prompt's
+// directory, may include subdirectories) and opens it.
 func (a *App) createFile(name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -272,10 +273,10 @@ func (a *App) createFile(name string) error {
 	if !strings.HasSuffix(name, ".http") {
 		name += ".http"
 	}
-	if !filepath.IsLocal(name) {
+	p := filepath.Join(a.promptDir, name)
+	if !filepath.IsLocal(a.relTo(p)) {
 		return errors.New("the name must be inside the project")
 	}
-	p := filepath.Join(a.cwd, name)
 	if err := writeNew(p, newFileTemplate); err != nil {
 		return err
 	}

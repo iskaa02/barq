@@ -34,6 +34,7 @@ type entry struct {
 	Rel        string // path relative to the project, slash-separated
 	Method     string // requests only
 	URL        string // requests only
+	Name       string // requests only: the name in the file, "" if unnamed
 	Start, End int    // requests: 0-based line range of the block, End exclusive
 }
 
@@ -44,7 +45,7 @@ func skipDir(name string) bool {
 
 // scanFiles lists the .http files under root, with their requests.
 func scanFiles(root string) []entry {
-	var files []string
+	var files []string // .http files, and empty directories (marked by a trailing /)
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		switch {
 		case err != nil:
@@ -52,6 +53,9 @@ func scanFiles(root string) []entry {
 		case d.IsDir():
 			if p != root && skipDir(d.Name()) {
 				return filepath.SkipDir
+			}
+			if ents, err := os.ReadDir(p); p != root && err == nil && len(ents) == 0 {
+				files = append(files, p+"/")
 			}
 		case strings.HasSuffix(d.Name(), ".http"):
 			files = append(files, p)
@@ -63,9 +67,14 @@ func scanFiles(root string) []entry {
 	var out []entry
 	var shown []string // directories on the path of the last file
 	for _, f := range files {
+		emptyDir := strings.HasSuffix(f, "/")
+		f = strings.TrimSuffix(f, "/")
 		rel, _ := filepath.Rel(root, f)
 		parts := strings.Split(filepath.ToSlash(rel), "/")
 		dirs := parts[:len(parts)-1]
+		if emptyDir {
+			dirs = parts
+		}
 		keep := 0
 		for keep < len(shown) && keep < len(dirs) && shown[keep] == dirs[keep] {
 			keep++
@@ -75,6 +84,9 @@ func scanFiles(root string) []entry {
 			out = append(out, entry{Kind: dirEntry, Label: dirs[i] + "/", Depth: i,
 				Path: filepath.Join(root, filepath.FromSlash(strings.Join(dirs[:i+1], "/"))), Rel: strings.Join(dirs[:i+1], "/")})
 		}
+		if emptyDir {
+			continue
+		}
 		out = append(out, entry{Kind: fileEntry, Label: parts[len(parts)-1], Path: f, Depth: len(dirs), Rel: filepath.ToSlash(rel)})
 		data, err := os.ReadFile(f)
 		if err != nil {
@@ -82,7 +94,7 @@ func scanFiles(root string) []entry {
 		}
 		for _, r := range httpfile.Parse(string(data)) {
 			out = append(out, entry{Kind: reqEntry, Label: requestLabel(r), Path: f, Line: r.Line, Depth: len(dirs) + 1,
-				Rel: filepath.ToSlash(rel), Method: r.Method, URL: r.URL, Start: r.Start, End: r.End})
+				Rel: filepath.ToSlash(rel), Method: r.Method, URL: r.URL, Start: r.Start, End: r.End, Name: r.Name})
 		}
 	}
 	return out
@@ -103,8 +115,9 @@ func requestLabel(r httpfile.Request) string {
 // row is one visible sidebar line.
 type row struct {
 	entry
-	Count     int  // requests inside (directories and files)
-	Collapsed bool // directories and files
+	Count     int    // requests inside (directories and files)
+	Collapsed bool   // directories and files
+	File      string // a file's only request stands in for the file: its name
 }
 
 // sidebar is the file tree: directories, .http files and their requests.
@@ -119,9 +132,93 @@ type sidebar struct {
 	cur  int
 	top  int
 
+	carry *carry // an item picked up with m or c, waiting for a target
+
 	// activePath/activeLine: where the editor's cursor is (0-based line).
 	activePath string
 	activeLine int
+}
+
+// carry is the item picked up by m (move) or c (copy).
+type carry struct {
+	move bool
+	item item
+}
+
+// item is something the sidebar can act on: a directory, an .http file or
+// one request of a file. A file's only request stands in for the file.
+type item struct {
+	Kind  entryKind
+	Path  string // absolute
+	Rel   string // relative to the project, slash-separated
+	Name  string // requests: the name in the file, "" if unnamed
+	Idx   int    // requests: 1-based position in the file
+	Count int    // requests inside (directories and files)
+}
+
+// carried reports whether row r is the picked-up item.
+func (s *sidebar) carried(r row) bool {
+	if s.carry == nil {
+		return false
+	}
+	c := s.carry.item
+	if r.File != "" {
+		return c.Kind == fileEntry && c.Path == r.Path
+	}
+	if c.Kind != r.Kind || c.Path != r.Path {
+		return false
+	}
+	return c.Kind != reqEntry || (c.Idx == s.reqIdx(r.entry))
+}
+
+// reqIdx is the 1-based position of request e in its file.
+func (s *sidebar) reqIdx(e entry) int {
+	n := 0
+	for _, o := range s.entries {
+		if o.Kind == reqEntry && o.Path == e.Path && o.Line <= e.Line {
+			n++
+		}
+	}
+	return n
+}
+
+// itemOf is what row r stands for.
+func (s *sidebar) itemOf(r row) item {
+	it := item{Kind: r.Kind, Path: r.Path, Rel: r.Rel, Count: r.Count}
+	switch {
+	case r.File != "":
+		it.Kind, it.Count = fileEntry, 1
+	case r.Kind == reqEntry:
+		it.Name, it.Idx = r.Name, s.reqIdx(r.entry)
+	}
+	return it
+}
+
+// selectPath puts the cursor on the directory, file (or its only request)
+// at path, unfolding what hides it.
+func (s *sidebar) selectPath(kind entryKind, path string) {
+	for p := filepath.Dir(path); p != "." && p != string(filepath.Separator); p = filepath.Dir(p) {
+		delete(s.collapsed, p)
+	}
+	s.filter, s.filtering = "", false
+	s.rebuild()
+	for i, r := range s.rows {
+		if r.Path == path && (r.Kind == kind || (kind == fileEntry && r.File != "")) {
+			s.cur = i
+			return
+		}
+	}
+}
+
+// selectReq puts the cursor on request name of the file at path.
+func (s *sidebar) selectReq(path, name string) {
+	for i, r := range s.rows {
+		if r.Kind == reqEntry && r.Path == path && r.Name == name {
+			s.cur = i
+			return
+		}
+	}
+	s.selectPath(fileEntry, path)
 }
 
 func filterTerms(q string) []string { return strings.Fields(strings.ToLower(q)) }
@@ -176,6 +273,7 @@ func buildRows(entries []entry, collapsed map[string]bool, terms []string) []row
 	}
 	var rows []row
 	hideBelow := -1 // inside a collapsed entry of this depth
+	file := ""      // set while the previous entry was a one-request file
 	for i, e := range entries {
 		if hideBelow >= 0 {
 			if e.Depth > hideBelow {
@@ -186,7 +284,17 @@ func buildRows(entries []entry, collapsed map[string]bool, terms []string) []row
 		if len(terms) > 0 && !keep[i] {
 			continue
 		}
+		// A file with a single request isn't a group: its request takes
+		// the file's place, with the file name beside it.
+		if e.Kind == fileEntry && count[i] == 1 && i+1 < n && entries[i+1].Kind == reqEntry {
+			file = e.Label
+			continue
+		}
 		r := row{entry: e, Count: count[i]}
+		if file != "" && e.Kind == reqEntry {
+			r.Depth--
+			r.File, file = file, ""
+		}
 		if e.Kind != reqEntry && len(terms) == 0 && collapsed[e.Path] {
 			r.Collapsed = true
 			hideBelow = e.Depth
@@ -473,6 +581,15 @@ func (s *sidebar) rowLine(r row, w int, selected, open bool) string {
 	terms := s.terms()
 	indent := strings.Repeat("  ", r.Depth)
 	inner := w - 1 // the last cell holds the open marker
+	carried := s.carried(r)
+	mark := ""
+	if carried {
+		mark = " ⧉"
+		if s.carry.move {
+			mark = " ✂"
+		}
+		inner -= 2
+	}
 	var plain, styled string
 	switch r.Kind {
 	case dirEntry, fileEntry:
@@ -487,13 +604,23 @@ func (s *sidebar) rowLine(r row, w int, selected, open bool) string {
 		styled = indent + muted.Render(arrow) + highlightTerms(name, terms, boldStyle) + muted.Render(count)
 	default:
 		method := fmt.Sprintf("%-6s", methodLabel(r.Method))
-		name := ansi.Truncate(r.Label, max(inner-len(indent)-len(method)-1, 4), "…")
-		plain = indent + method + " " + name
+		room := max(inner-len(indent)-len(method)-1, 4)
+		name := ansi.Truncate(r.Label, room, "…")
+		file := ""
+		if r.File != "" && room-ansi.StringWidth(name) > 4 {
+			file = "  " + ansi.Truncate(r.File, room-ansi.StringWidth(name)-2, "…")
+		}
+		plain = indent + method + " " + name + file
 		ns := lipgloss.NewStyle()
 		if s.isActive(r.entry) {
 			ns = accentBold
 		}
-		styled = indent + lipgloss.NewStyle().Bold(true).Foreground(methodColor(r.Method)).Render(method) + " " + highlightTerms(name, terms, ns)
+		styled = indent + lipgloss.NewStyle().Bold(true).Foreground(methodColor(r.Method)).Render(method) + " " +
+			highlightTerms(name, terms, ns) + muted.Render(file)
+	}
+	if carried {
+		plain += mark
+		styled += muted.Italic(true).Render(mark)
 	}
 	marker := " "
 	if open && r.Kind == reqEntry {

@@ -163,18 +163,45 @@ func (a *App) sideKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "/":
 		a.side.filtering = true
 	case "esc":
+		if a.side.carry != nil {
+			a.side.carry = nil
+			break
+		}
 		a.side.clearFilter()
 	case "R":
 		a.rescan()
 	case "n":
-		a.modal = nameModal
-		a.input.Reset()
-		a.input.Placeholder = "name.http"
-		return a.input.Focus()
+		return a.startNew(false)
+	case "f":
+		return a.startNew(true)
+	case "r":
+		return a.startRename()
+	case "d", "delete":
+		a.startDelete()
+	case "m", "c":
+		if a.side.carry == nil {
+			a.startCarry(s == "m")
+			break
+		}
+		a.dropCarried()
+	case "space", " ":
+		if a.side.carry != nil {
+			a.dropCarried()
+		}
 	case "enter":
+		if a.side.carry != nil {
+			a.dropCarried()
+			break
+		}
 		return a.openSelected()
 	}
 	return nil
+}
+
+func (a *App) dropCarried() {
+	if err := a.drop(); err != nil {
+		a.flashErr(err.Error())
+	}
 }
 
 // openSelected is enter on the sidebar: fold a directory or file, or open a
@@ -200,10 +227,18 @@ func (a *App) modalKey(msg tea.KeyPressMsg) tea.Cmd {
 	s := msg.String()
 	switch a.modal {
 	case confirmModal:
-		p := a.pending
-		a.modal, a.pending = noModal, nil
+		p, fn := a.pending, a.confirmFn
+		a.modal, a.pending, a.confirmFn = noModal, nil, nil
 		if s == "y" || s == "Y" || s == "enter" {
-			return a.dispatch(p)
+			if fn != nil {
+				if err := fn(); err != nil {
+					a.flashErr(err.Error())
+				}
+				return nil
+			}
+			if p != nil {
+				return a.dispatch(p)
+			}
 		}
 	case nameModal:
 		switch s {
@@ -211,7 +246,7 @@ func (a *App) modalKey(msg tea.KeyPressMsg) tea.Cmd {
 			a.modal = noModal
 		case "enter":
 			a.modal = noModal
-			if err := a.createFile(a.input.Value()); err != nil {
+			if err := a.submitPrompt(a.input.Value()); err != nil {
 				a.flashErr(err.Error())
 			}
 		default:

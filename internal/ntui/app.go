@@ -94,6 +94,13 @@ type App struct {
 	modal   modalKind
 	input   textinput.Model
 	pending *pendingSend
+
+	// Sidebar actions (sideops.go): the prompt's purpose, and what a
+	// confirm modal runs on y.
+	promptKind, promptLabel, promptDir string
+	promptItem                         item
+	confirmText                        string
+	confirmFn                          func() error
 }
 
 type tab struct {
@@ -331,12 +338,33 @@ func (a *App) tabBar(w int) string {
 func (a *App) footer() string {
 	switch a.modal {
 	case confirmModal:
-		return errStyle.Render(" "+a.pending.confirmText()) + " (y/n)"
+		text := a.confirmText
+		if a.pending != nil {
+			text = a.pending.confirmText()
+		}
+		return errStyle.Render(" "+text) + " (y/n)"
 	case nameModal:
-		return " new file: " + a.input.View()
+		return " " + a.promptLabel + ": " + a.input.View()
 	}
-	parts := []string{" " + a.EnvName(), a.focus.String(),
-		muted.Render("alt+enter send · alt+h/l focus · alt+e env · ctrl+q quit")}
+	hints := "alt+enter send · alt+h/l focus · alt+e env · ctrl+q quit"
+	if a.focus == focusSide {
+		hints = "n new · f folder · r rename · d delete · m move · c copy · / filter"
+		if c := a.side.carry; c != nil {
+			verb, sym := "copy", "⧉"
+			if c.move {
+				verb, sym = "move", "✂"
+			}
+			what := filepath.Base(c.item.Path)
+			if c.item.Kind == reqEntry {
+				what = c.item.Name
+				if what == "" {
+					what = "request"
+				}
+			}
+			hints = sym + " " + verb + " " + what + " · m/enter on a target to drop · esc cancels"
+		}
+	}
+	parts := []string{" " + a.EnvName(), a.focus.String(), muted.Render(hints)}
 	if a.focus == focusResp {
 		parts = append(parts, muted.Render("tab views · gc capture · gd diff"))
 	}

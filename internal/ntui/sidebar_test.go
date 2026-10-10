@@ -32,7 +32,7 @@ func TestBuildRowsCounts(t *testing.T) {
 			got[strings.TrimSuffix(r.Label, "/")] = r.Count
 		}
 	}
-	want := map[string]int{"api.http": 1, "requests": 5, "auth": 2, "login.http": 2, "users.http": 3}
+	want := map[string]int{"requests": 5, "auth": 2, "login.http": 2, "users.http": 3}
 	for k, v := range want {
 		if got[k] != v {
 			t.Errorf("%s: count %d, want %d", k, got[k], v)
@@ -52,7 +52,7 @@ func TestBuildRowsCollapse(t *testing.T) {
 		}
 	}
 	rows := buildRows(es, map[string]bool{reqDir: true}, nil)
-	if got := labels(rows); got != "api.http| /ping|requests" || !rows[2].Collapsed {
+	if got := labels(rows); got != "/ping|requests" || !rows[1].Collapsed {
 		t.Fatalf("dir collapsed: %q", got)
 	}
 	rows = buildRows(es, map[string]bool{users: true}, nil)
@@ -82,9 +82,9 @@ func TestBuildRowsFilter(t *testing.T) {
 func TestSidebarNavigation(t *testing.T) {
 	var s sidebar
 	s.set(sideTree(t))
-	s.cur = 2 // requests/
+	s.cur = 1 // requests/
 	s.left()
-	if r, _ := s.selected(); !r.Collapsed || len(s.rows) != 3 {
+	if r, _ := s.selected(); !r.Collapsed || len(s.rows) != 2 {
 		t.Fatalf("not collapsed: %q", labels(s.rows))
 	}
 	s.right()
@@ -114,7 +114,7 @@ func TestSidebarFilterKeys(t *testing.T) {
 		t.Fatal(s.filter)
 	}
 	s.filterKey("esc", "")
-	if s.filter != "" || len(s.rows) != 11 {
+	if s.filter != "" || len(s.rows) != 10 {
 		t.Fatalf("not cleared: %d", len(s.rows))
 	}
 }
@@ -154,11 +154,11 @@ func TestSidebarRender(t *testing.T) {
 			t.Errorf("width %d: %q", w, ansi.Strip(l))
 		}
 	}
-	if got := ansi.Strip(lines[1]); !strings.HasPrefix(got, "  GET    /ping") {
-		t.Errorf("request row %q", got)
+	if got := ansi.Strip(lines[0]); !strings.HasPrefix(got, "GET    /ping  api.http") {
+		t.Errorf("single-request file row %q", got)
 	}
-	if got := ansi.Strip(lines[0]); !strings.HasPrefix(got, "▾ api.http 1") {
-		t.Errorf("file row %q", got)
+	if got := ansi.Strip(lines[1]); !strings.HasPrefix(got, "▾ requests 5") {
+		t.Errorf("dir row %q", got)
 	}
 	// The cursor row stays visible when it scrolls past the window.
 	s.cur = len(s.rows) - 1
@@ -174,7 +174,7 @@ func TestSidebarTruncateAndMarker(t *testing.T) {
 	var s sidebar
 	s.set(scanFiles(root))
 	path := s.rows[0].Path
-	out := ansi.Strip(s.render(20, 3, false, map[string]bool{path: true})[1])
+	out := ansi.Strip(s.render(20, 3, false, map[string]bool{path: true})[0])
 	if !strings.Contains(out, "…") || !strings.HasSuffix(out, "•") || ansi.StringWidth(out) != 20 {
 		t.Errorf("row %q", out)
 	}
@@ -186,5 +186,17 @@ func TestSidebarEmpty(t *testing.T) {
 	out := strings.Join(s.render(20, 5, false, nil), "\n")
 	if !strings.Contains(ansi.Strip(out), "No .http files") {
 		t.Errorf("%q", out)
+	}
+}
+
+func TestSingleRequestFileIsOneRow(t *testing.T) {
+	rows := buildRows(sideTree(t), nil, nil)
+	r := rows[0]
+	if r.Kind != reqEntry || r.Depth != 0 || r.File != "api.http" || r.Label != "/ping" {
+		t.Fatalf("got %+v", r)
+	}
+	// Files with several requests still group them.
+	if !strings.Contains(labels(rows), "users.http|  /users") {
+		t.Fatalf("got %q", labels(rows))
 	}
 }
