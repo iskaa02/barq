@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,6 +22,7 @@ const (
 	editBody editTarget = iota
 	editURL
 	editHeaders
+	editRequest  // the whole request as one .http file
 	editResponse // read-only: opened for viewing, changes are ignored
 )
 
@@ -61,6 +63,93 @@ const headersHelp = "## One header per line as Key: Value. Start a line with # t
 
 const formHelp = "## One form field per line as name: value. A value starting with @ is a file,\n" +
 	"## relative to the project directory or absolute. Start a line with # to disable it.\n"
+
+const requestHelp = "## The first line is METHOD URL, then one header per line as Key: Value\n" +
+	"## (start a line with # to disable it), then a blank line, then the body.\n" +
+	"## Lines starting with ## above the body are ignored.\n" +
+	"## \"@capture name = jq-filter\" lines among the headers store part of each\n" +
+	"## successful response in an environment variable (saved requests only).\n"
+
+const requestFormHelp = "## The body is form-data: one field per line as name: value. A value\n" +
+	"## starting with @ is a file. Start a line with # to disable it.\n"
+
+// httpRequest is a request in the .http layout edited with ctrl+o.
+type httpRequest struct {
+	Method, URL string
+	Headers     []core.HeaderRow
+	Body        string
+	Captures    []core.Capture
+	// CaptureErr is set when an @capture line doesn't parse; Captures is
+	// then incomplete and shouldn't replace the saved ones.
+	CaptureErr error
+}
+
+const captureDirective = "@capture"
+
+func requestToHTTP(r httpRequest, form bool) string {
+	var b strings.Builder
+	b.WriteString(requestHelp)
+	if form {
+		b.WriteString(requestFormHelp)
+	}
+	b.WriteString(r.Method + " " + r.URL + "\n")
+	b.WriteString(strings.TrimPrefix(headersToText(r.Headers), headersHelp))
+	for _, c := range r.Captures {
+		b.WriteString(captureDirective + " " + c.String() + "\n")
+	}
+	b.WriteString("\n" + r.Body)
+	return b.String()
+}
+
+// httpToRequest reads back what requestToHTTP wrote. The headers end at the
+// first blank line and everything after it is the body, kept as is. A
+// request line without a method keeps the current one, reported as "".
+func httpToRequest(text string) (httpRequest, bool) {
+	var r httpRequest
+	lines := strings.SplitAfter(text, "\n")
+	i := 0
+	for ; i < len(lines); i++ {
+		if l := strings.TrimSpace(lines[i]); l != "" && !strings.HasPrefix(l, "##") {
+			break
+		}
+	}
+	if i == len(lines) {
+		return r, false
+	}
+	switch f := strings.Fields(lines[i]); {
+	case len(f) == 1 && slices.Contains(core.Methods, strings.ToUpper(f[0])):
+		r.Method = strings.ToUpper(f[0]) // no URL yet
+	case len(f) == 1:
+		r.URL = f[0]
+	default:
+		r.Method, r.URL = strings.ToUpper(f[0]), strings.Join(f[1:], " ")
+	}
+	i++
+	start := i
+	for ; i < len(lines) && strings.TrimSpace(lines[i]) != ""; i++ {
+	}
+	var headers strings.Builder
+	for _, l := range lines[start:i] {
+		spec, ok := strings.CutPrefix(strings.TrimSpace(l), captureDirective)
+		if !ok {
+			headers.WriteString(l)
+			continue
+		}
+		c, err := core.ParseCapture(spec)
+		if err != nil {
+			r.CaptureErr = err
+			continue
+		}
+		// A later line for the same variable replaces the earlier one.
+		r.Captures = slices.DeleteFunc(r.Captures, func(x core.Capture) bool { return x.Var == c.Var })
+		r.Captures = append(r.Captures, c)
+	}
+	r.Headers = textToHeaders(headers.String())
+	if i < len(lines) {
+		r.Body = strings.TrimSuffix(strings.Join(lines[i+1:], ""), "\n")
+	}
+	return r, true
+}
 
 func headersToText(rows []core.HeaderRow) string { return kvToText(headersHelp, rows) }
 
@@ -103,6 +192,16 @@ func (m *Model) openEditor(target editTarget) tea.Cmd {
 		content, ext = m.url.Value()+"\n", ".txt"
 	case editHeaders:
 		content, ext = headersToText(m.headers.Rows()), ".txt"
+	case editRequest:
+		r := httpRequest{Method: m.method(), URL: m.url.Value(), Headers: m.headers.Rows(), Body: m.body.Value()}
+		if j := m.ws.Find(t.savedID); t.savedID != "" && j >= 0 {
+			r.Captures = m.ws.Requests[j].Captures
+		}
+		form := m.bodyMode == core.BodyForm
+		if form {
+			r.Body = strings.TrimPrefix(kvToText(formHelp, m.form.Rows()), formHelp)
+		}
+		content, ext = requestToHTTP(r, form), ".http"
 	case editResponse:
 		if t.result == nil {
 			m.notice = errorStyle.Render("no response to open yet")
@@ -177,6 +276,28 @@ func (m *Model) editorDone(msg editorDoneMsg) {
 		m.url.CursorEnd()
 	case editHeaders:
 		m.headers.SetRows(textToHeaders(text))
+	case editRequest:
+		r, ok := httpToRequest(text)
+		if !ok {
+			m.notice = errorStyle.Render("no request line in the file; nothing changed")
+			return
+		}
+		if r.Method != "" {
+			m.methodIdx = methodIndex(r.Method)
+		}
+		m.url.SetValue(r.URL)
+		m.url.CursorEnd()
+		m.syncParamsFromURL()
+		m.headers.SetRows(r.Headers)
+		if m.bodyMode == core.BodyForm {
+			m.form.SetRows(textToHeaders(r.Body))
+		} else {
+			m.body.SetValue(r.Body)
+		}
+		if !m.applyCaptures(r) {
+			m.Persist()
+			return
+		}
 	case editBody:
 		if m.bodyMode == core.BodyForm {
 			m.form.SetRows(textToHeaders(text))
@@ -189,4 +310,29 @@ func (m *Model) editorDone(msg editorDoneMsg) {
 	}
 	m.Persist()
 	m.flash("updated from editor")
+}
+
+// applyCaptures replaces the current saved request's captures with the
+// ones from an edited .http file. It reports false, with a notice, when
+// they couldn't be applied.
+func (m *Model) applyCaptures(r httpRequest) bool {
+	if r.CaptureErr != nil {
+		m.notice = errorStyle.Render("captures unchanged: " + r.CaptureErr.Error())
+		return false
+	}
+	id := m.cur().savedID
+	j := m.ws.Find(id)
+	if id == "" || j < 0 {
+		if len(r.Captures) > 0 {
+			m.notice = errorStyle.Render("captures ignored: save the request first (ctrl+s)")
+			return false
+		}
+		return true
+	}
+	if slices.Equal(m.ws.Requests[j].Captures, r.Captures) {
+		return true
+	}
+	return m.mutate(func(w *core.Workspace) error {
+		return w.UpdateRequest(id, func(req *core.Request) { req.Captures = r.Captures })
+	})
 }

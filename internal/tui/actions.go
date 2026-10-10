@@ -64,6 +64,7 @@ func (m Model) rootItems() []paletteItem {
 	}
 	add(true, paletteItem{key: "cmd:body-mode", category: "Request", title: bodySwitch, hint: "alt+m",
 		run: func(m *Model) tea.Cmd { m.toggleBodyMode(); return nil }})
+	add(true, cmd("Request", "Edit whole request in $EDITOR", "ctrl+o", func(m *Model) tea.Cmd { return m.openEditor(editRequest) }))
 	add(true, cmd("Request", "Edit body in $EDITOR", "ctrl+x ctrl+e", func(m *Model) tea.Cmd { return m.openEditor(editBody) }))
 	add(true, cmd("Request", "Edit URL in $EDITOR", "", func(m *Model) tea.Cmd { return m.openEditor(editURL) }))
 	add(true, cmd("Request", "Edit headers in $EDITOR", "", func(m *Model) tea.Cmd { return m.openEditor(editHeaders) }))
@@ -291,6 +292,7 @@ func shortcutItems(Model) []paletteItem {
 		{"Headers: accept suggestion", "tab / enter"},
 		{"Headers: toggle / delete row", "ctrl+t / ctrl+d"},
 		{"Open focused field in $EDITOR", "ctrl+x ctrl+e"},
+		{"Edit whole request in $EDITOR (.http)", "ctrl+o"},
 		{"Response: switch body/headers", "t"},
 		{"Response: find (enter/↑/↓ to step)", "/ or ctrl+f"},
 		{"Response: jq filter", "|"},

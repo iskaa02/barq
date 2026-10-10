@@ -33,6 +33,7 @@ Run `barq` in a project directory (optionally `barq <url>` or `barq "curl …"`)
 | `ctrl+r`, `enter` in URL | send |
 | `ctrl+s` | save · `ctrl+n` new tab · `ctrl+w` close tab · `alt+←/→` switch tab |
 | `ctrl+x ctrl+e` | edit the focused field in `$EDITOR` |
+| `ctrl+o` | edit the whole request in `$EDITOR` as one `.http` file |
 | `alt+e` / `alt+v` | switch environment / edit its variables |
 | `/` and `\|` in the response | find / jq filter |
 | `/` in the sidebar | filter saved requests |

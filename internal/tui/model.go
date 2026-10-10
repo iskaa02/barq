@@ -936,6 +936,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+s":
 			m.saveCurrent()
 			return m, nil
+		case "ctrl+o":
+			return m, m.openEditor(editRequest)
 		case "ctrl+n":
 			m.openTab(core.Request{Method: "GET"}, "")
 			return m, nil
