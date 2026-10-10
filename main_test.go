@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"testing"
+
+	"github.com/zalando/go-keyring"
+)
 
 func TestCheckNvimVersion(t *testing.T) {
 	for line, ok := range map[string]bool{
@@ -29,4 +34,18 @@ func TestLooksLikeRequest(t *testing.T) {
 	if !removedCommands["rm"] || !removedCommands["rename"] || removedCommands["run"] {
 		t.Error("removedCommands")
 	}
+}
+
+// Tests must never touch the real ~/.barq or keyring.
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "barq-home-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("HOME", home)
+	os.Setenv("USERPROFILE", home)
+	keyring.MockInit()
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
 }

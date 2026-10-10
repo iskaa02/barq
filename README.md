@@ -4,8 +4,10 @@ An API client for the terminal: a Neovim-based UI for people,
 and a CLI that lets scripts and AI agents do the same things **without ever
 seeing your secrets**.
 
-Requests are `.http` files in your project. Environments, variables and run
-history are saved per project directory in `~/.barq`, never inside the project.
+Requests are `.http` files. New ones are saved per project in
+`~/.barq/requests/<project>/` (`barq dir` prints it), so they never end up in your repo; `.http`
+files already in the project folder are picked up too. Environments, variables and run history
+are saved per project directory in `~/.barq` as well.
 
 ![barq demo: log in, list users with the captured token, filter with jq, browse runs](assets/demo.gif)
 
@@ -26,7 +28,11 @@ To build from a clone instead: `go build -o barq .`
 
 `barq` opens a Neovim-based UI for the project directory: `.http` files | editor | response.
 The editor is an embedded Neovim running your own config. Requires **Neovim 0.10+** on `PATH`.
-`barq <url>` or `barq "curl …"` appends the request to `scratch.http` and opens it.
+`barq <url>` or `barq "curl …"` appends the request to `.barq/scratch.http` (in the store) and opens it.
+
+The sidebar has two sections: `.barq` (the store; `n` / `f` create files and folders there unless
+you select a project folder) and the project folder (shown when it has `.http` files). `m` moves a
+project file into `.barq`; its history follows.
 
 | Keys | |
 |---|---|
@@ -81,12 +87,15 @@ avatar: @./images/me.png           # @path = a file
 
 ## The CLI (for scripts and AI agents)
 
-Commands: `run`, `ls`, `show`, `curl`, `history`, `env`, `import`, `ai`. A request is
-`file.http#name`, `file.http#n` (1-based block number) or a bare `name` that is unique in the project.
+Commands: `run`, `ls`, `show`, `curl`, `history`, `env`, `import`, `dir`, `ai`. A request is
+`file.http#name`, `file.http#n` (1-based block number) or a bare `name` that is unique across the
+project and the store. Files in the store have a `.barq/` prefix (`.barq/auth.http#login`); project
+files have none (`auth.http#login`). `barq ls --json` gives each file's absolute path.
 
 ```sh
 barq ai                                   # the full guide, written for agents
 barq ls --json
+barq dir                                  # where this project's requests are stored
 barq run auth.http#login                  # stores {{token}} as a secret
 barq run "list orders" --jq '.data[0]' --json
 barq show auth.http#2
@@ -95,7 +104,7 @@ barq import openapi.json
 barq import --saved                       # write old saved requests out as .http files
 ```
 
-Edit the `.http` files directly to add or change requests.
+Edit the `.http` files directly (in `barq dir`) to add or change requests.
 
 **Large responses.** Bodies are kept whole, in history too, scrubbed of
 secrets. The UI shows the first 10 MB, and `barq run` prints the first 1 MB

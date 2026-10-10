@@ -39,17 +39,17 @@ func TestFind(t *testing.T) {
 		"only-b":         "sub/b.http#only-b",
 		"ONLY-B":         "sub/b.http#only-b",
 	} {
-		got, _, err := Find(root, ref)
+		got, _, err := Find(Roots{Project: root}, ref)
 		if err != nil || got.Key() != want {
 			t.Errorf("Find(%q) = %v, %v; want %s", ref, got.Key(), err, want)
 		}
 	}
 	for _, ref := range []string{"login", "nope", "hidden", "api.http#9", "api.http#zzz", "missing.http"} {
-		if _, _, err := Find(root, ref); err == nil {
+		if _, _, err := Find(Roots{Project: root}, ref); err == nil {
 			t.Errorf("Find(%q) should fail", ref)
 		}
 	}
-	all, err := ListAll(root)
+	all, err := ListAll(Roots{Project: root})
 	if err != nil || len(all) != 4 {
 		t.Errorf("ListAll: %d %v", len(all), err)
 	}
@@ -79,7 +79,7 @@ func TestSend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, req, err := Find(root, "api.http#go")
+	ref, req, err := Find(Roots{Project: root}, "api.http#go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestSend(t *testing.T) {
 	}
 
 	// Failed status: no capture; failing expectation reported.
-	ref, req, _ = Find(root, "api.http#bad")
+	ref, req, _ = Find(Roots{Project: root}, "api.http#bad")
 	req.Expects = append(req.Expects, req.Expects...) // none
 	res2, err := Send(context.Background(), ws, id, root, ref, req, Opts{Vars: map[string]string{"n": "9"}})
 	if err != nil || len(res2.Captured) != 0 {
@@ -115,7 +115,7 @@ func TestSend(t *testing.T) {
 	res2.Resp.Close()
 
 	// Undefined variable.
-	_, req, _ = Find(root, "api.http#go")
+	_, req, _ = Find(Roots{Project: root}, "api.http#go")
 	req.URL = "{{nope}}/x"
 	if _, err := Send(context.Background(), ws, id, root, ref, req); err == nil || !strings.Contains(err.Error(), "nope") {
 		t.Errorf("missing var: %v", err)
@@ -124,7 +124,7 @@ func TestSend(t *testing.T) {
 
 func TestNeedsConfirm(t *testing.T) {
 	ws := &core.Workspace{Environments: []core.Environment{{ID: "p", Name: "prod", Protected: true}}}
-	_, req, _ := Find(writeTmp(t, "### a\nPOST http://x\n"), "a")
+	_, req, _ := Find(Roots{Project: writeTmp(t, "### a\nPOST http://x\n")}, "a")
 	if !NeedsConfirm(ws, "p", req) || NeedsConfirm(ws, "", req) {
 		t.Error("protected env should confirm writes only there")
 	}
@@ -142,7 +142,7 @@ func writeTmp(t *testing.T, text string) string {
 
 func TestAppendBlocks(t *testing.T) {
 	root := t.TempDir()
-	p := filepath.Join(root, "requests", "x.http")
+	p := filepath.Join(root, "x.http")
 	reqs := []httpfile.Request{{Name: "one", Method: "GET", URL: "http://x/1"}, {Name: "two", Method: "POST", URL: "http://x/2", Body: "{}"}}
 	if a, s, err := AppendBlocks(p, reqs); err != nil || a != 2 || s != 0 {
 		t.Fatal(a, s, err)
@@ -154,7 +154,7 @@ func TestAppendBlocks(t *testing.T) {
 	if !strings.Contains(string(b), "### three\nGET") && !strings.Contains(string(b), "### three\n") {
 		t.Errorf("file:\n%s", b)
 	}
-	if es, _ := readFile(root, "requests/x.http"); len(es) != 3 || es[1].Req.Body != "{}" {
+	if es, _ := readFile(Roots{Project: root}, "x.http"); len(es) != 3 || es[1].Req.Body != "{}" {
 		t.Errorf("parsed: %+v", es)
 	}
 }
@@ -185,14 +185,14 @@ func TestImportSaved(t *testing.T) {
 	if err != nil || n != 2 || skipped != 0 {
 		t.Fatalf("got %d %d %v", n, skipped, err)
 	}
-	b, err := os.ReadFile(filepath.Join(root, "requests", "auth-stuff", "log-in.http"))
+	b, err := os.ReadFile(filepath.Join(root, "auth-stuff", "log-in.http"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r := httpfile.Parse(string(b)); len(r) != 1 || r[0].Method != "POST" || r[0].Body != `{"u":1}` {
 		t.Errorf("round trip: %q", b)
 	}
-	if _, err := os.Stat(filepath.Join(root, "requests", "users.http")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "users.http")); err != nil {
 		t.Error(err)
 	}
 	if n, skipped, _ = ImportSaved(root, ws); n != 0 || skipped != 2 {
@@ -215,7 +215,7 @@ func TestImportSavedCollisions(t *testing.T) {
 		t.Fatalf("%d %d %v %v", n, sk, warns, err)
 	}
 	for _, f := range []string{"users.http", "users-2.http", "get-user.http", "get-user-2.http"} {
-		if _, err := os.Stat(filepath.Join(root, "requests", f)); err != nil {
+		if _, err := os.Stat(filepath.Join(root, f)); err != nil {
 			t.Error(err)
 		}
 	}
@@ -236,7 +236,7 @@ func TestSendNoEnvCaptureStillRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, req, _ := Find(root, "api.http#go")
+	ref, req, _ := Find(Roots{Project: root}, "api.http#go")
 	res, err := Send(context.Background(), ws, "", root, ref, req)
 	if err != nil || res.Resp == nil {
 		t.Fatalf("send: %v", err)
@@ -270,7 +270,7 @@ func TestDoIndependentOfWorkspace(t *testing.T) {
 		id = w.AddEnv("dev", []core.SavedHeader{{Key: "base", Value: srv.URL, Enabled: true}})
 		return nil
 	})
-	ref, req, _ := Find(root, "api.http#go")
+	ref, req, _ := Find(Roots{Project: root}, "api.http#go")
 	p, err := Prepare(ws, id, root, ref, req)
 	if err != nil {
 		t.Fatal(err)
@@ -324,7 +324,7 @@ func TestSendMultipart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, req, err := Find(root, "api/up.http#up")
+	ref, req, err := Find(Roots{Project: root}, "api/up.http#up")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,11 +349,92 @@ func TestBodyFileRelativeToRoot(t *testing.T) {
 	write(t, root, "data/p.txt", "payload")
 	write(t, root, "api/x.http", "### x\nPOST "+srv.URL+"\n\n< data/p.txt\n")
 	ws, _ := core.LoadWorkspace(root)
-	ref, req, err := Find(root, "api/x.http#x")
+	ref, req, err := Find(Roots{Project: root}, "api/x.http#x")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Send(context.Background(), ws, "", root, ref, req); err != nil || body != "payload" {
 		t.Errorf("%q %v", body, err)
+	}
+}
+
+func TestRoots(t *testing.T) {
+	proj, store := t.TempDir(), t.TempDir()
+	rt := Roots{Project: proj, Store: store}
+	for _, p := range []string{"api.http", "sub/b.http", ".barq/x.http", ".barq/d/y.http"} {
+		abs := rt.Abs(p)
+		if got, ok := rt.RefPath(abs); !ok || got != p {
+			t.Errorf("round trip %q -> %q -> %q %v", p, abs, got, ok)
+		}
+		if rt.IsStore(p) != strings.HasPrefix(p, ".barq/") {
+			t.Errorf("IsStore(%q)", p)
+		}
+	}
+	if rt.Abs(".barq/d/y.http") != filepath.Join(store, "d", "y.http") || rt.Abs("sub/b.http") != filepath.Join(proj, "sub", "b.http") {
+		t.Error("Abs")
+	}
+	if _, ok := rt.RefPath(filepath.Join(t.TempDir(), "o.http")); ok {
+		t.Error("outside both roots")
+	}
+	if _, ok := rt.RefPath(store); ok {
+		t.Error("the root itself is not a file")
+	}
+	// A store inside the project (project = HOME) is still the store.
+	nested := Roots{Project: proj, Store: filepath.Join(proj, ".barq", "requests", "p")}
+	if got, _ := nested.RefPath(filepath.Join(nested.Store, "a.http")); got != ".barq/a.http" {
+		t.Errorf("nested store: %q", got)
+	}
+}
+
+func TestTwoRoots(t *testing.T) {
+	proj, store := t.TempDir(), t.TempDir()
+	rt := Roots{Project: proj, Store: store}
+	write(t, proj, "api.http", "### login\nGET http://x/p\n\n### only-proj\nGET http://x/1\n")
+	write(t, store, "api.http", "### login\nGET http://x/s\n\n### only-store\nGET http://x/2\n")
+	write(t, store, "d/z.http", "GET http://x/z\n")
+	write(t, proj, ".barq/hidden.http", "GET http://x\n") // dot-dir: never scanned
+
+	all, err := ListAll(rt)
+	if err != nil || len(all) != 5 {
+		t.Fatalf("ListAll: %d %v", len(all), err)
+	}
+	keys := map[string]bool{}
+	for _, e := range all {
+		keys[e.Ref.Key()] = true
+	}
+	for _, k := range []string{"api.http#login", ".barq/api.http#login", "api.http#only-proj", ".barq/api.http#only-store", ".barq/d/z.http#1"} {
+		if !keys[k] {
+			t.Errorf("missing key %s in %v", k, keys)
+		}
+	}
+	ref, req, err := Find(rt, ".barq/api.http#login")
+	if err != nil || req.URL != "http://x/s" || ref.File(rt) != filepath.Join(store, "api.http") {
+		t.Errorf("store find: %v %v %v", ref, req.URL, err)
+	}
+	if ref, req, err = Find(rt, "api.http#login"); err != nil || req.URL != "http://x/p" || ref.Key() != "api.http#login" {
+		t.Errorf("project find: %v %v %v", ref, req.URL, err)
+	}
+	if _, req, err = Find(rt, filepath.Join(store, "d", "z.http")); err != nil || req.URL != "http://x/z" {
+		t.Errorf("abs find: %v %v", req.URL, err)
+	}
+	if _, req, err = Find(rt, "only-store"); err != nil || req.URL != "http://x/2" {
+		t.Errorf("bare store name: %v %v", req.URL, err)
+	}
+	_, _, err = Find(rt, "login")
+	if err == nil || !strings.Contains(err.Error(), "api.http#login") || !strings.Contains(err.Error(), ".barq/api.http#login") {
+		t.Errorf("ambiguous bare name: %v", err)
+	}
+}
+
+func TestMissingStore(t *testing.T) {
+	proj := t.TempDir()
+	store := filepath.Join(t.TempDir(), "nope")
+	write(t, proj, "a.http", "GET http://x\n")
+	all, err := ListAll(Roots{Project: proj, Store: store})
+	if err != nil || len(all) != 1 {
+		t.Fatalf("%d %v", len(all), err)
+	}
+	if _, err := os.Stat(store); !os.IsNotExist(err) {
+		t.Error("scan must not create the store")
 	}
 }

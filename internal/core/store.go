@@ -156,11 +156,9 @@ func (w *Workspace) WriteLockPath() string {
 
 var unsafeChars = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
-func workspacePath(cwd string) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
+// projectName is the "<slug>-<hash>" name that identifies a project
+// directory under ~/.barq (its workspace file and its requests folder).
+func projectName(cwd string) string {
 	slug := strings.Trim(unsafeChars.ReplaceAllString(cwd, "-"), "-")
 	if slug == "" {
 		slug = "root"
@@ -169,8 +167,34 @@ func workspacePath(cwd string) (string, error) {
 		slug = slug[len(slug)-60:]
 	}
 	sum := sha256.Sum256([]byte(cwd))
-	name := slug + "-" + hex.EncodeToString(sum[:4]) + ".json"
-	return filepath.Join(home, ".barq", "workspaces", name), nil
+	return slug + "-" + hex.EncodeToString(sum[:4])
+}
+
+func barqDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".barq"), nil
+}
+
+func workspacePath(cwd string) (string, error) {
+	d, err := barqDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(d, "workspaces", projectName(cwd)+".json"), nil
+}
+
+// RequestsDir is where this project's own .http files live:
+// ~/.barq/requests/<slug>-<hash>/. It may not exist yet; nothing creates it
+// until a request is written.
+func (w *Workspace) RequestsDir() string {
+	d, err := barqDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(d, "requests", projectName(w.CWD))
 }
 
 func LoadWorkspace(cwd string) (*Workspace, error) {

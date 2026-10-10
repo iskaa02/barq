@@ -237,7 +237,7 @@ func (a *App) CurrentRequest() (path string, req httpfile.Request, key string, e
 }
 
 // requestKey identifies request i of a file as the CLI does: the runner
-// Ref key, "relpath#name" or "relpath#n" (1-based), relative to the project.
+// Ref key, "refpath#name" or "refpath#n" (1-based); see runner.Roots.
 func (a *App) requestKey(path string, reqs []httpfile.Request, i int) string {
 	return runner.Ref{Path: filepath.ToSlash(a.rel(path)), Name: reqs[i].Name, Index: i + 1}.Key()
 }
@@ -259,7 +259,7 @@ func (a *App) openAt(path string, line int) error {
 }
 
 func (a *App) rescan() {
-	a.side.set(scanFiles(a.cwd))
+	a.side.set(scanFiles(a.roots()))
 	a.snapshotPickerFiles()
 }
 
@@ -274,8 +274,8 @@ func (a *App) createFile(name string) error {
 		name += ".http"
 	}
 	p := filepath.Join(a.promptDir, name)
-	if !filepath.IsLocal(a.relTo(p)) {
-		return errors.New("the name must be inside the project")
+	if _, ok := a.roots().RefPath(p); !ok {
+		return errors.New("the name must be inside the project or .barq")
 	}
 	if err := writeNew(p, newFileTemplate); err != nil {
 		return err

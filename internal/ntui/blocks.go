@@ -1,6 +1,7 @@
 package ntui
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/iskaa02/barq/internal/httpfile"
 	"github.com/iskaa02/barq/internal/runner"
@@ -307,6 +309,24 @@ func copyFile(src, dst string, mode fs.FileMode) error {
 		err = cerr
 	}
 	return err
+}
+
+// movePath renames src to dst; across file systems (the store is under the
+// home directory, the project may not be) it copies and then removes src.
+func movePath(src, dst string) error {
+	err := os.Rename(src, dst)
+	if err == nil {
+		return nil
+	}
+	var le *os.LinkError
+	if !errors.As(err, &le) || !errors.Is(le.Err, syscall.EXDEV) {
+		return err
+	}
+	if err := copyPath(src, dst); err != nil {
+		_ = os.RemoveAll(dst)
+		return err
+	}
+	return os.RemoveAll(src)
 }
 
 func exists(p string) bool {

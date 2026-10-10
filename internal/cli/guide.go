@@ -11,11 +11,17 @@ func cmdAI(c *cli, args []string) error {
 
 const aiGuide = `# barq — API client for agents
 
-barq sends the requests written in a project's .http files. The requests are
-plain text in the repo: you edit the .http files directly (there are no
-commands to create, change or delete requests), and run them with barq
-instead of hand-written curl. A human may have the barq UI open on the same
-files; it picks up your edits.
+barq sends the requests written in .http files. They are plain text: you edit
+the files directly (there are no commands to create, change or delete
+requests), and run them with barq instead of hand-written curl. A human may
+have the barq UI open on the same files; it picks up your edits.
+
+## Where requests live
+New requests are stored outside the repo, per project, in a directory that
+"barq dir" prints (~/.barq/requests/<project>/). Create and edit .http files
+there. .http files inside the project folder are picked up as well. Refs of
+store files carry a ".barq/" prefix (.barq/api.http#login); project files
+have none (api.http#login). "barq ls --json" has the absolute "file" of each.
 
 ## The .http format
 One or more requests per file, separated by lines starting with ###:
@@ -53,6 +59,7 @@ One or more requests per file, separated by lines starting with ###:
 
 ## Referring to a request
   api.http#login      file (relative to the project) and name
+  .barq/api.http#login   the same in the store (see "barq dir")
   api.http#2          the 2nd request of the file, for unnamed ones
   api.http            the file's first request
   login               a bare name, when only one request has it
@@ -76,6 +83,7 @@ One or more requests per file, separated by lines starting with ###:
 
 ## Commands  (all accept --dir <project> and --json)
   barq ls                              every request: ref, method, URL
+  barq dir                             the directory where requests are stored
   barq show <ref> [--env E]            the request's text and its resolved URL
   barq run <ref> [--env E] [--var k=v]… [--capture var=jq]… [--jq F] [-i] [-o FILE] [--fail] [--yes]
   barq curl <ref> [--env E]            curl with secrets kept as {{vars}}
@@ -83,12 +91,12 @@ One or more requests per file, separated by lines starting with ###:
   barq history body <run-id> [--jq F | --grep RE | --lines A:B | --bytes A:B | --path]
   barq env ls | show [E] | use E|none | new E [--use] [--protect|--protect-all] | set E KEY VALUE|- [--secret]
   barq env unset E KEY | rename E NAME | rm E | protect E [--all]
-  barq import <openapi.json|yaml|url> [--dry-run]   writes requests/<tag>.http files
+  barq import <openapi.json|yaml|url> [--dry-run]   writes <store>/<tag>.http files
   barq import --saved                  writes the old saved requests as .http files
   barq                                 with no arguments, opens the UI
 
 ## Workflow
-  1. barq ls                           find or add the request in a .http file
+  1. barq ls                           find or add the request in a .http file (in barq dir)
   2. barq run api.http#login           {{token}} is captured (secret, not shown)
   3. barq run api.http#list-orders     uses Authorization: Bearer {{token}}
 If a request returns 401, the token has probably expired: run the login
@@ -111,6 +119,6 @@ to save space; the run stays and says so ("body_pruned").
 Human-readable by default; --json for structured output:
   run:  {run_id, request, status, code, duration_ms, size, headers, body, captured[],
          expects, failed_expects[], redacted, partial, body_file}
-  ls:   [{ref, path, name, index, method, url}]
+  ls:   [{ref, path, file, name, index, method, url}]  (file is absolute)
 Exit status: 0 ok, 1 error, 2 bad usage, 3 HTTP >= 400 with --fail, 4 an @expect failed.
 `

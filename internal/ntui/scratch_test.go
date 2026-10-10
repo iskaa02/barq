@@ -30,7 +30,7 @@ func TestScratchBlockCurl(t *testing.T) {
 }
 
 func TestAppendScratch(t *testing.T) {
-	dir := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "not", "yet") // the store is created on first write
 	if _, _, err := AppendScratch(dir, "https://a.test/1"); err != nil {
 		t.Fatal(err)
 	}

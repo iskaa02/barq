@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/iskaa02/barq/internal/core"
 	"github.com/iskaa02/barq/internal/httpfile"
+	"github.com/iskaa02/barq/internal/runner"
 )
 
 type entryKind int
@@ -31,7 +32,7 @@ type entry struct {
 	Line  int    // 0-based request line, for requests
 	Depth int
 
-	Rel        string // path relative to the project, slash-separated
+	Rel        string // ref path: relative to the project, or ".barq/…" in the store
 	Method     string // requests only
 	URL        string // requests only
 	Name       string // requests only: the name in the file, "" if unnamed
@@ -43,8 +44,44 @@ func skipDir(name string) bool {
 	return strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor"
 }
 
-// scanFiles lists the .http files under root, with their requests.
-func scanFiles(root string) []entry {
+// scanFiles lists the two sections of the tree: the store (".barq", always
+// there so n has a target, even before the directory exists) and the project
+// (named after its folder, there only when it holds .http files). Entry.Path
+// is absolute; Entry.Rel is the ref path.
+func scanFiles(rt runner.Roots) []entry {
+	out := []entry{{Kind: dirEntry, Label: runner.StorePrefix, Path: rt.Store, Rel: strings.TrimSuffix(runner.StorePrefix, "/")}}
+	out = append(out, scanTree(rt, rt.Store, 1)...)
+	if proj := scanTree(rt, rt.Project, 1); hasFile(proj) {
+		out = append(out, entry{Kind: dirEntry, Label: filepath.Base(rt.Project) + "/", Path: rt.Project})
+		out = append(out, proj...)
+	}
+	return out
+}
+
+func hasRequest(es []entry) bool {
+	for _, e := range es {
+		if e.Kind == reqEntry {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFile(es []entry) bool {
+	for _, e := range es {
+		if e.Kind == fileEntry {
+			return true
+		}
+	}
+	return false
+}
+
+// scanTree lists the .http files under root, with their requests, starting
+// at depth. A missing root is empty; nothing is created.
+func scanTree(rt runner.Roots, root string, depth int) []entry {
+	if root == "" {
+		return nil
+	}
 	var files []string // .http files, and empty directories (marked by a trailing /)
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		switch {
@@ -69,8 +106,15 @@ func scanFiles(root string) []entry {
 	for _, f := range files {
 		emptyDir := strings.HasSuffix(f, "/")
 		f = strings.TrimSuffix(f, "/")
-		rel, _ := filepath.Rel(root, f)
-		parts := strings.Split(filepath.ToSlash(rel), "/")
+		ref, ok := rt.RefPath(f)
+		if !ok {
+			continue
+		}
+		rel := strings.TrimPrefix(ref, runner.StorePrefix)
+		if root == rt.Project {
+			rel = ref
+		}
+		parts := strings.Split(rel, "/")
 		dirs := parts[:len(parts)-1]
 		if emptyDir {
 			dirs = parts
@@ -81,20 +125,21 @@ func scanFiles(root string) []entry {
 		}
 		shown = dirs
 		for i := keep; i < len(dirs); i++ {
-			out = append(out, entry{Kind: dirEntry, Label: dirs[i] + "/", Depth: i,
-				Path: filepath.Join(root, filepath.FromSlash(strings.Join(dirs[:i+1], "/"))), Rel: strings.Join(dirs[:i+1], "/")})
+			dir := filepath.Join(root, filepath.FromSlash(strings.Join(dirs[:i+1], "/")))
+			dr, _ := rt.RefPath(dir)
+			out = append(out, entry{Kind: dirEntry, Label: dirs[i] + "/", Depth: depth + i, Path: dir, Rel: dr})
 		}
 		if emptyDir {
 			continue
 		}
-		out = append(out, entry{Kind: fileEntry, Label: parts[len(parts)-1], Path: f, Depth: len(dirs), Rel: filepath.ToSlash(rel)})
+		out = append(out, entry{Kind: fileEntry, Label: parts[len(parts)-1], Path: f, Depth: depth + len(dirs), Rel: ref})
 		data, err := os.ReadFile(f)
 		if err != nil {
 			continue
 		}
 		for _, r := range httpfile.Parse(string(data)) {
-			out = append(out, entry{Kind: reqEntry, Label: requestLabel(r), Path: f, Line: r.Line, Depth: len(dirs) + 1,
-				Rel: filepath.ToSlash(rel), Method: r.Method, URL: r.URL, Start: r.Start, End: r.End, Name: r.Name})
+			out = append(out, entry{Kind: reqEntry, Label: requestLabel(r), Path: f, Line: r.Line, Depth: depth + len(dirs) + 1,
+				Rel: ref, Method: r.Method, URL: r.URL, Start: r.Start, End: r.End, Name: r.Name})
 		}
 	}
 	return out
@@ -150,7 +195,7 @@ type carry struct {
 type item struct {
 	Kind  entryKind
 	Path  string // absolute
-	Rel   string // relative to the project, slash-separated
+	Rel   string // ref path (see entry.Rel)
 	Name  string // requests: the name in the file, "" if unnamed
 	Idx   int    // requests: 1-based position in the file
 	Count int    // requests inside (directories and files)
@@ -664,6 +709,9 @@ func (s *sidebar) render(w, h int, focused bool, open map[string]bool) []string 
 	for i := s.top; i < len(s.rows) && i < s.top+h; i++ {
 		r := s.rows[i]
 		out = append(out, s.rowLine(r, w, i == s.cur && focused, open[r.Path]))
+	}
+	if s.filter == "" && len(out) < h && !hasRequest(s.entries) {
+		out = append(out, muted.Render(fit(" n creates a request file", w)))
 	}
 	return out
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/iskaa02/barq/internal/core"
 	"github.com/iskaa02/barq/internal/httpfile"
+	"github.com/iskaa02/barq/internal/runner"
 )
 
 func write(t *testing.T, path, content string) {
@@ -31,12 +32,13 @@ func TestScanFiles(t *testing.T) {
 	write(t, filepath.Join(root, "notes.txt"), "no")
 
 	var got []string
-	for _, e := range scanFiles(root) {
+	for _, e := range scanFiles(runner.Roots{Project: root, Store: filepath.Join(root, "nostore")}) {
 		got = append(got, strings.Repeat(" ", e.Depth)+e.Label)
 	}
 	want := []string{
-		"a.http", " login", " /me",
-		"api/", " v1/", "  b.http", "   /b",
+		".barq/", filepath.Base(root) + "/",
+		" a.http", "  login", "  /me",
+		" api/", "  v1/", "   b.http", "    /b",
 	}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("got %q\nwant %q", got, want)
@@ -45,12 +47,15 @@ func TestScanFiles(t *testing.T) {
 
 func TestRequestKey(t *testing.T) {
 	reqs := httpfile.Parse("### one\nGET http://x\n### \nGET http://y\n")
-	a := &App{cwd: "/p"}
+	a := &App{cwd: "/p", store: "/h/.barq/requests/p-1"}
 	if k := a.requestKey("/p/d/a.http", reqs, 0); k != "d/a.http#one" {
 		t.Errorf("named: %q", k)
 	}
 	if k := a.requestKey("/p/d/a.http", reqs, 1); k != "d/a.http#2" {
 		t.Errorf("unnamed: %q", k)
+	}
+	if k := a.requestKey("/h/.barq/requests/p-1/d/a.http", reqs, 0); k != ".barq/d/a.http#one" {
+		t.Errorf("store: %q", k)
 	}
 }
 

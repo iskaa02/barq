@@ -276,13 +276,13 @@ func (a *App) copyCurl() {
 }
 
 func (a *App) importSaved() {
-	written, skipped, warnings, err := runner.ImportSavedWarn(a.cwd, a.ws)
+	written, skipped, warnings, err := runner.ImportSavedWarn(a.store, a.ws)
 	if err != nil {
 		a.flashErr(err.Error())
 		return
 	}
 	a.rescan()
-	msg := fmt.Sprintf("imported %d requests into requests/ (%d already there)", written, skipped)
+	msg := fmt.Sprintf("imported %d requests into %s (%d already there)", written, runner.StorePrefix, skipped)
 	if len(warnings) > 0 {
 		// The details are kept as ## comments in the written files.
 		msg += fmt.Sprintf(" · %d need attention (see ## comments): %s", len(warnings), warnings[0])

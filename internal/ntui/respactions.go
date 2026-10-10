@@ -2,7 +2,6 @@ package ntui
 
 import (
 	"errors"
-	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -198,7 +197,7 @@ func (a *App) addCapture(key, name, filter string) error {
 	if i < 0 {
 		return errors.New("bad request key")
 	}
-	path := filepath.Join(a.cwd, filepath.FromSlash(key[:i]))
+	path := a.roots().Abs(key[:i])
 	nv := a.ed.Nvim()
 	var n int
 	if err := a.ed.ExecLua(`local b = vim.fn.bufnr(...); if b > 0 and vim.api.nvim_buf_is_loaded(b) then return b end; return -1`, &n, path); err != nil {

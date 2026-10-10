@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/iskaa02/barq/internal/core"
 	"github.com/iskaa02/barq/internal/httpfile"
+	"github.com/iskaa02/barq/internal/runner"
 	"github.com/neovim/go-client/nvim"
 )
 
@@ -140,14 +141,15 @@ func (a *App) moveKeys(pairs []keyPair) {
 	a.mu.Unlock()
 }
 
-// fileKeys is the history key changes of a whole file moving to newRel.
+// fileKeys is the history key changes of a whole file moving from oldPath
+// to newPath (the keys change when it moves between the project and the store).
 func (a *App) fileKeys(oldPath, newPath string) []keyPair {
 	data, err := os.ReadFile(oldPath)
 	if err != nil {
 		return nil
 	}
 	reqs := httpfile.Parse(strings.Join(splitLines(string(data)), "\n"))
-	return keyPairs(filepath.ToSlash(a.rel(oldPath)), reqs, filepath.ToSlash(a.rel(newPath)), reqs, identityIdx(len(reqs)))
+	return keyPairs(a.rel(oldPath), reqs, a.rel(newPath), reqs, identityIdx(len(reqs)))
 }
 
 // Prompts ---------------------------------------------------------------------
@@ -161,12 +163,13 @@ func (a *App) prompt(kind, label, value string, it item, dir string) tea.Cmd {
 }
 
 // ctxDir is the directory a new file or folder goes in: the selected
-// directory, or the one holding the selected file or request.
+// directory (a section row is its root: the store or the project), or the
+// one holding the selected file or request. With nothing selected: the store.
 func (a *App) ctxDir() string {
 	r, ok := a.side.selected()
 	switch {
 	case !ok:
-		return a.cwd
+		return a.store
 	case r.Kind == dirEntry:
 		return r.Path
 	}
@@ -174,11 +177,17 @@ func (a *App) ctxDir() string {
 }
 
 func (a *App) dirLabel(dir string) string {
-	if r := filepath.ToSlash(a.rel(dir)); r != "." {
-		return r + "/"
+	switch dir {
+	case a.store:
+		return runner.StorePrefix
+	case a.cwd:
+		return "./"
 	}
-	return "./"
+	return a.rel(dir) + "/"
 }
+
+// isSection reports whether path is a section root: the store or the project.
+func (a *App) isSection(path string) bool { return path == a.store || path == a.cwd }
 
 func (a *App) startNew(folder bool) tea.Cmd {
 	dir := a.ctxDir()
@@ -194,6 +203,10 @@ func (a *App) startRename() tea.Cmd {
 		return nil
 	}
 	it := a.side.itemOf(r)
+	if it.Kind == dirEntry && a.isSection(it.Path) {
+		a.flashErr("can't rename " + a.dirLabel(it.Path))
+		return nil
+	}
 	if r.File != "" {
 		// The row shows the file's only request: rename what it shows.
 		it = item{Kind: reqEntry, Path: r.Path, Rel: r.Rel, Name: r.Name, Idx: a.side.reqIdx(r.entry)}
@@ -224,8 +237,8 @@ func (a *App) submitPrompt(value string) error {
 // createFolder makes a directory (and parents) under the prompt's directory.
 func (a *App) createFolder(name string) error {
 	p := filepath.Join(a.promptDir, name)
-	if !filepath.IsLocal(a.relTo(p)) {
-		return errors.New("the name must be inside the project")
+	if _, ok := a.roots().RefPath(p); !ok {
+		return errors.New("the name must be inside the project or .barq")
 	}
 	if exists(p) {
 		return errors.New(a.rel(p) + " already exists")
@@ -236,14 +249,6 @@ func (a *App) createFolder(name string) error {
 	a.rescan()
 	a.side.selectPath(dirEntry, p)
 	return nil
-}
-
-func (a *App) relTo(p string) string {
-	r, err := filepath.Rel(a.cwd, p)
-	if err != nil {
-		return ".."
-	}
-	return r
 }
 
 // Rename ------------------------------------------------------------------------
@@ -274,7 +279,7 @@ func (a *App) rename(it item, name string) error {
 
 func (a *App) renameRequest(it item, name string) error {
 	var pairs []keyPair
-	rel := filepath.ToSlash(a.rel(it.Path))
+	rel := a.rel(it.Path)
 	err := a.editFile(it.Path, func(lines []string) ([]string, error) {
 		reqs := parseLines(lines)
 		k := findReq(reqs, it.Name, it.Idx)
@@ -319,7 +324,7 @@ func (a *App) relocate(it item, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	if err := os.Rename(it.Path, dst); err != nil {
+	if err := movePath(it.Path, dst); err != nil {
 		return err
 	}
 	for _, f := range files {
@@ -356,6 +361,10 @@ func (a *App) startDelete() {
 		return
 	}
 	it := a.side.itemOf(r)
+	if it.Kind == dirEntry && a.isSection(it.Path) {
+		a.flashErr("can't delete " + a.dirLabel(it.Path))
+		return
+	}
 	var text string
 	switch it.Kind {
 	case dirEntry:
@@ -376,7 +385,7 @@ func (a *App) startDelete() {
 func (a *App) delete(it item) error {
 	if it.Kind == reqEntry {
 		var pairs []keyPair
-		rel := filepath.ToSlash(a.rel(it.Path))
+		rel := a.rel(it.Path)
 		err := a.editFile(it.Path, func(lines []string) ([]string, error) {
 			reqs := parseLines(lines)
 			k := findReq(reqs, it.Name, it.Idx)
@@ -423,7 +432,12 @@ func (a *App) startCarry(move bool) {
 	if !ok {
 		return
 	}
-	a.side.carry = &carry{move: move, item: a.side.itemOf(r)}
+	it := a.side.itemOf(r)
+	if it.Kind == dirEntry && a.isSection(it.Path) {
+		a.flashErr("can't pick up " + a.dirLabel(it.Path))
+		return
+	}
+	a.side.carry = &carry{move: move, item: it}
 }
 
 // drop puts the carried item on the selected row.
@@ -482,8 +496,8 @@ func (a *App) dropRequest(c *carry, t row) error {
 	}
 	src := c.item
 	tgt := a.side.itemOf(t)
-	srcRel := filepath.ToSlash(a.rel(src.Path))
-	dstRel := filepath.ToSlash(a.rel(t.Path))
+	srcRel := a.rel(src.Path)
+	dstRel := a.rel(t.Path)
 	srcLines, err := a.readLines(src.Path)
 	if err != nil {
 		return err

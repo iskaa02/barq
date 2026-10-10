@@ -54,7 +54,7 @@ func TestSmoke(t *testing.T) {
 	}
 	defer tm("kill-session", "-t", sess)
 	tm("new-session", "-d", "-s", sess, "-x", "140", "-y", "30",
-		fmt.Sprintf("cd %s && HOME=%s %s", proj, home, bin))
+		fmt.Sprintf("cd %s && HOME=%s USERPROFILE=%s %s", proj, home, home, bin))
 
 	waitFor := func(what string) string {
 		var screen string

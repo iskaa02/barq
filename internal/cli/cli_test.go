@@ -54,8 +54,19 @@ type cliEnv struct {
 }
 
 func newCLIEnv(t *testing.T) *cliEnv {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	return &cliEnv{t: t, dir: t.TempDir()}
+}
+
+// store is the directory where this project's requests are stored.
+func (e *cliEnv) store() string {
+	ws, err := core.LoadWorkspace(e.dir)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return ws.RequestsDir()
 }
 
 func (e *cliEnv) run(stdin string, args ...string) (int, string, string) {
@@ -342,11 +353,11 @@ func TestCLIImport(t *testing.T) {
 	  "paths":{"/pets":{"get":{"tags":["pets"],"summary":"List pets"},"post":{"tags":["pets"],"summary":"Add pet"}},
 	           "/owners":{"get":{"summary":"List owners"}}}}`), 0o644)
 	e.ok("import", spec)
-	b, err := os.ReadFile(filepath.Join(e.dir, "requests", "pets.http"))
+	b, err := os.ReadFile(filepath.Join(e.store(), "pets.http"))
 	if err != nil || !strings.Contains(string(b), "### List pets\nGET {{baseUrl}}/pets") || !strings.Contains(string(b), "### Add pet") {
 		t.Fatalf("pets.http: %v\n%s", err, b)
 	}
-	if _, err := os.Stat(filepath.Join(e.dir, "requests", "owners.http")); err != nil {
+	if _, err := os.Stat(filepath.Join(e.store(), "owners.http")); err != nil {
 		t.Error(err)
 	}
 	if out := e.ok("env", "ls"); !strings.Contains(out, "pets.test") {
@@ -358,7 +369,7 @@ func TestCLIImport(t *testing.T) {
 	if res.Added != 0 || res.Skipped != 3 {
 		t.Errorf("re-import: %+v", res)
 	}
-	if out := e.ok("ls"); !strings.Contains(out, "requests/pets.http#List pets") {
+	if out := e.ok("ls"); !strings.Contains(out, ".barq/pets.http#List pets") {
 		t.Errorf("ls:\n%s", out)
 	}
 }
@@ -376,7 +387,7 @@ func TestCLIImportSaved(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.ok("import", "--saved")
-	if _, err := os.Stat(filepath.Join(e.dir, "requests", "log-in.http")); err != nil {
+	if _, err := os.Stat(filepath.Join(e.store(), "log-in.http")); err != nil {
 		t.Error(err)
 	}
 	if out := e.ok("import", "--saved"); !strings.Contains(out, "0 request(s)") || !strings.Contains(out, "1 already") {
@@ -522,7 +533,7 @@ func TestCLIImportMultipart(t *testing.T) {
 	  "paths":{"/up":{"post":{"tags":["files"],"summary":"Upload","requestBody":{"content":{"multipart/form-data":{"schema":{
 	    "type":"object","required":["file","title"],"properties":{"title":{"type":"string"},"file":{"type":"string","format":"binary"}}}}}}}}}}`), 0o644)
 	e.ok("import", spec)
-	b, err := os.ReadFile(filepath.Join(e.dir, "requests", "files.http"))
+	b, err := os.ReadFile(filepath.Join(e.store(), "files.http"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,5 +573,40 @@ func TestCLIRunAndCurlMultipart(t *testing.T) {
 	if !strings.Contains(out, "--form-string 'name=bob'") || !strings.Contains(out, "-F 'doc=@docs/a.txt'") ||
 		strings.Contains(out, "Content-Type") || strings.Contains(out, "off") {
 		t.Errorf("curl:\n%s", out)
+	}
+}
+
+func TestCLIStoreAndDir(t *testing.T) {
+	e := newCLIEnv(t)
+	if out := strings.TrimSpace(e.ok("dir")); out != e.store() {
+		t.Errorf("dir = %q, want %q", out, e.store())
+	}
+	e.writeHTTP("api.http", "### login\nGET http://x/p\n")
+	p := filepath.Join(e.store(), "api.http")
+	if err := os.MkdirAll(e.store(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("### login\nGET http://x/s\n\n### only\nGET http://x/o\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var rows []struct{ Ref, Path, File string }
+	if err := json.Unmarshal([]byte(e.ok("ls", "--json")), &rows); err != nil || len(rows) != 3 {
+		t.Fatalf("ls --json: %v %+v", err, rows)
+	}
+	files := map[string]string{}
+	for _, r := range rows {
+		files[r.Ref] = r.File
+	}
+	if files["api.http#login"] != filepath.Join(e.dir, "api.http") || files[".barq/api.http#login"] != p {
+		t.Errorf("files: %v", files)
+	}
+	if out := e.ok("show", ".barq/api.http#login"); !strings.Contains(out, "http://x/s") {
+		t.Errorf("show store:\n%s", out)
+	}
+	if out := e.ok("curl", "only"); !strings.Contains(out, "http://x/o") {
+		t.Errorf("curl bare name:\n%s", out)
+	}
+	if code, _, errOut := e.run("", "show", "login"); code == 0 || !strings.Contains(errOut, ".barq/api.http#login") {
+		t.Errorf("ambiguous: %d %s", code, errOut)
 	}
 }

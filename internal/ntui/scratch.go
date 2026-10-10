@@ -11,7 +11,8 @@ import (
 	"github.com/iskaa02/barq/internal/httpfile"
 )
 
-// ScratchFile is the file `barq <url>` appends new requests to.
+// ScratchFile is the file `barq <url>` appends new requests to,
+// in the store (.barq/scratch.http).
 const ScratchFile = "scratch.http"
 
 // scratchBlock renders arg, a URL or a curl command, as a .http block and
@@ -70,14 +71,14 @@ func shortName(method, raw string) string {
 	return strings.TrimSpace(method + " " + s)
 }
 
-// AppendScratch adds a block for arg to scratch.http in root (creating it)
-// and returns the file's path and the 1-based line of the new request line.
-func AppendScratch(root, arg string) (path string, line int, err error) {
+// AppendScratch adds a block for arg to scratch.http in dir, the store
+// (creating both on first use), and returns the file's path and the 1-based line of the new request line.
+func AppendScratch(dir, arg string) (path string, line int, err error) {
 	block, reqLine, err := scratchBlock(arg)
 	if err != nil {
 		return "", 0, err
 	}
-	path = filepath.Join(root, ScratchFile)
+	path = filepath.Join(dir, ScratchFile)
 	old, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return "", 0, err
@@ -87,6 +88,9 @@ func AppendScratch(root, arg string) (path string, line int, err error) {
 		text = strings.TrimRight(text, "\n") + "\n\n"
 	}
 	line = strings.Count(text, "\n") + reqLine + 1
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", 0, err
+	}
 	if err := os.WriteFile(path, []byte(text+block), 0o644); err != nil {
 		return "", 0, err
 	}

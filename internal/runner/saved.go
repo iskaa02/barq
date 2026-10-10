@@ -31,9 +31,9 @@ func Slug(s string) string {
 	return b.String()
 }
 
-// savedPath is where a legacy saved request goes: requests/<folders>/<name>.http.
-func savedPath(root string, ws *core.Workspace, r core.Request) string {
-	parts := []string{root, "requests"}
+// savedPath is where a legacy saved request goes: <dir>/<folders>/<name>.http.
+func savedPath(dir string, ws *core.Workspace, r core.Request) string {
+	parts := []string{dir}
 	for _, f := range core.SplitPath(ws.FolderPath(r.Folder)) {
 		parts = append(parts, Slug(f))
 	}
@@ -45,9 +45,9 @@ func savedPath(root string, ws *core.Workspace, r core.Request) string {
 }
 
 // ImportSaved writes the workspace's legacy saved requests out as .http
-// files, one per request, leaving existing files alone.
-func ImportSaved(root string, ws *core.Workspace) (written, skipped int, err error) {
-	written, skipped, _, err = ImportSavedWarn(root, ws)
+// files in dir (the store), one per request, leaving existing files alone.
+func ImportSaved(dir string, ws *core.Workspace) (written, skipped int, err error) {
+	written, skipped, _, err = ImportSavedWarn(dir, ws)
 	return
 }
 
@@ -58,14 +58,14 @@ func ImportSaved(root string, ws *core.Workspace) (written, skipped int, err err
 // Requests whose slug collides get a numeric suffix (users-2.http). A file
 // counts as already imported only if it existed before the run and holds a
 // block with that request's name.
-func ImportSavedWarn(root string, ws *core.Workspace) (written, skipped int, warnings []string, err error) {
+func ImportSavedWarn(dir string, ws *core.Workspace) (written, skipped int, warnings []string, err error) {
 	wrote := map[string]bool{}
 	for _, r := range ws.Requests {
 		hr := httpfile.FromCore(r)
 		if hr.Name == "" {
 			hr.Name = r.SuggestedName()
 		}
-		base := savedPath(root, ws, r)
+		base := savedPath(dir, ws, r)
 		p, skip := base, false
 		for n := 2; ; n++ {
 			if wrote[p] {

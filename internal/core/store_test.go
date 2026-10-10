@@ -1,6 +1,8 @@
 package core
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -83,5 +85,26 @@ func TestRepairAndSubtree(t *testing.T) {
 	}
 	if n := ws.CountIn("a"); n != 1 {
 		t.Errorf("countIn(a) = %d, want 1", n)
+	}
+}
+
+func TestRequestsDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	ws, err := LoadWorkspace("/some/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, ".barq", "requests", strings.TrimSuffix(filepath.Base(ws.Path), ".json"))
+	if got := ws.RequestsDir(); got != want {
+		t.Errorf("RequestsDir = %s, want %s", got, want)
+	}
+	other, _ := LoadWorkspace("/other/project")
+	if other.RequestsDir() == ws.RequestsDir() {
+		t.Error("different projects must have different request dirs")
+	}
+	if _, err := os.Stat(ws.RequestsDir()); !os.IsNotExist(err) {
+		t.Errorf("loading must not create the requests dir: %v", err)
 	}
 }

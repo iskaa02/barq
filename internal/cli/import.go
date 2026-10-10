@@ -11,8 +11,8 @@ import (
 	"github.com/iskaa02/barq/internal/runner"
 )
 
-// cmdImport writes an OpenAPI spec's operations to .http files under
-// requests/, one file per tag, and adds its servers as environments.
+// cmdImport writes an OpenAPI spec's operations to .http files in the
+// store (see `barq dir`), one file per tag, and adds its servers as environments.
 // With --saved it writes the legacy saved requests of the workspace instead.
 func cmdImport(c *cli, args []string) error {
 	fs := c.flags("import")
@@ -70,7 +70,7 @@ func cmdImport(c *cli, args []string) error {
 			}
 			reqs = append(reqs, hr)
 		}
-		path := filepath.Join(c.root(), "requests", name+".http")
+		path := filepath.Join(c.ws.RequestsDir(), name+".http")
 		if *dryRun {
 			continue
 		}
@@ -104,12 +104,12 @@ func cmdImport(c *cli, args []string) error {
 	if *dryRun {
 		verb = "Would import"
 	}
-	c.printf("%s %q into %s\n", verb, res.Title, filepath.Join(c.root(), "requests"))
+	c.printf("%s %q into %s\n", verb, res.Title, c.ws.RequestsDir())
 	if !*dryRun {
 		c.printf("  %d request(s) written, %d already there\n", added, skipped)
 	}
 	for _, n := range names {
-		c.printf("    requests/%s.http  %3d\n", n, len(files[n]))
+		c.printf("    %s%s.http  %3d\n", runner.StorePrefix, n, len(files[n]))
 	}
 	c.printf("  environments: %s\n", strings.Join(res.Envs, ", "))
 	if *dryRun {
@@ -152,10 +152,10 @@ func firstSegment(rawURL, fallback string) string {
 // importSaved writes the legacy saved requests as .http files.
 func (c *cli) importSaved(dryRun bool) error {
 	if dryRun {
-		c.printf("Would write %d saved request(s) under requests/.\n", len(c.ws.Requests))
+		c.printf("Would write %d saved request(s) to %s.\n", len(c.ws.Requests), c.ws.RequestsDir())
 		return nil
 	}
-	written, skipped, warnings, err := runner.ImportSavedWarn(c.root(), c.ws)
+	written, skipped, warnings, err := runner.ImportSavedWarn(c.ws.RequestsDir(), c.ws)
 	if err != nil {
 		return err
 	}
@@ -165,6 +165,6 @@ func (c *cli) importSaved(dryRun bool) error {
 	if c.asJSON {
 		return c.printJSON(map[string]any{"written": written, "skipped": skipped})
 	}
-	c.printf("Wrote %d request(s) to requests/ (%d already there)\n", written, skipped)
+	c.printf("Wrote %d request(s) to %s (%d already there)\n", written, c.ws.RequestsDir(), skipped)
 	return nil
 }

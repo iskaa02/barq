@@ -23,7 +23,7 @@
 //     (not the file on disk) and returns the path, the request under the
 //     cursor and its key. It calls nvim, so use it from update/hooks only.
 //   - Responses. The key of a request is "<file path>#<name or block index>"
-//     (runner.Ref.Key(), relative to the project). a.LastResponses(key) returns up to two responses sent this session,
+//     (runner.Ref.Key(): a ref path, see runner.Roots). a.LastResponses(key) returns up to two responses sent this session,
 //     oldest first. Past runs (also from earlier sessions) are in core history; a.shown may be one of them (Response.Hist).
 package ntui
 
@@ -41,6 +41,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/iskaa02/barq/internal/core"
 	"github.com/iskaa02/barq/internal/nvimpane"
+	"github.com/iskaa02/barq/internal/runner"
 )
 
 type focus int
@@ -63,9 +64,10 @@ const (
 
 // App is the Bubble Tea model.
 type App struct {
-	ws  *core.Workspace
-	cwd string
-	in  chan tea.Msg // messages from RPC goroutines
+	ws    *core.Workspace
+	cwd   string       // the project directory: "< file" and @file paths are relative to it
+	store string       // ~/.barq/requests/<project>: where new requests go
+	in    chan tea.Msg // messages from RPC goroutines
 
 	mu         sync.Mutex // guards the snapshots below
 	envName    string
@@ -136,10 +138,10 @@ type Options struct {
 
 // Run starts the UI and blocks until it quits.
 func Run(ws *core.Workspace, cwd string, opts Options) error {
-	a := &App{ws: ws, cwd: cwd, in: make(chan tea.Msg, 256), resps: map[string][]*Response{}}
+	a := &App{ws: ws, cwd: cwd, store: ws.RequestsDir(), in: make(chan tea.Msg, 256), resps: map[string][]*Response{}}
 	a.input = textinput.New()
 	a.refreshEnv()
-	a.side.set(scanFiles(cwd))
+	a.side.set(scanFiles(a.roots()))
 	var files []string
 	if len(a.side.entries) > 0 {
 		for _, e := range a.side.entries {
@@ -312,17 +314,34 @@ func (a *App) content() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, side, ed, rp) + "\n" + fit(a.footer(), a.w)
 }
 
+// roots maps between request files and their ref paths.
+func (a *App) roots() runner.Roots { return runner.Roots{Project: a.cwd, Store: a.store} }
+
+// rel is the ref path of a file (what labels, history keys and the CLI
+// call it), or p itself when it is in neither root.
 func (a *App) rel(p string) string {
-	if r, err := filepath.Rel(a.cwd, p); err == nil {
+	if r, ok := a.roots().RefPath(p); ok {
 		return r
 	}
 	return p
 }
 
+// tabLabel is a tab's file name, with its ref path when another open tab
+// has the same name (api.http in the project and in the store).
+func (a *App) tabLabel(t tab) string {
+	name := filepath.Base(t.Path)
+	for _, o := range a.tabs {
+		if o.Path != t.Path && filepath.Base(o.Path) == name {
+			return a.rel(t.Path)
+		}
+	}
+	return name
+}
+
 func (a *App) tabBar(w int) string {
 	var b strings.Builder
 	for _, t := range a.tabs {
-		name := filepath.Base(t.Path)
+		name := a.tabLabel(t)
 		if t.Mod {
 			name += "+"
 		}

@@ -31,6 +31,7 @@ var cliCommands map[string]cliCommand
 func init() {
 	cliCommands = map[string]cliCommand{
 		"ls":      {cmdLs, "list requests in .http files"},
+		"dir":     {cmdDir, "print the directory where this project's requests are stored"},
 		"show":    {cmdShow, "show a request and its resolved URL"},
 		"run":     {cmdRun, "send a request"},
 		"history": {cmdHistory, "list or show past runs"},

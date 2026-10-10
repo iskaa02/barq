@@ -76,7 +76,7 @@ func main() {
 		for _, w := range ntui.ScratchWarnings(os.Args[1]) {
 			fmt.Fprintln(os.Stderr, "warning:", w)
 		}
-		path, line, err := ntui.AppendScratch(cwd, os.Args[1])
+		path, line, err := ntui.AppendScratch(ws.RequestsDir(), os.Args[1])
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "barq:", err)
 			os.Exit(1)

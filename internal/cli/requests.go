@@ -19,6 +19,9 @@ func splitKV(s, sep, what string) (string, string, error) {
 // root is the project directory: where the .http files are searched.
 func (c *cli) root() string { return c.ws.CWD }
 
+// roots are the project directory and the per-project store.
+func (c *cli) roots() runner.Roots { return runner.RootsOf(c.ws) }
+
 func (c *cli) checkReveal() error {
 	if c.reveal {
 		return c.confirm("Showing secret values")
@@ -28,7 +31,7 @@ func (c *cli) checkReveal() error {
 
 // find resolves a request reference in the project.
 func (c *cli) find(ref string) (runner.Ref, httpfile.Request, error) {
-	return runner.Find(c.root(), ref)
+	return runner.Find(c.roots(), ref)
 }
 
 // Commands ---------------------------------------------------------------------
@@ -41,13 +44,14 @@ func cmdLs(c *cli, args []string) error {
 	if err := c.open(); err != nil {
 		return err
 	}
-	all, err := runner.ListAll(c.root())
+	all, err := runner.ListAll(c.roots())
 	if err != nil {
 		return err
 	}
 	type reqOut struct {
 		Ref    string `json:"ref"`
 		Path   string `json:"path"`
+		File   string `json:"file"` // absolute
 		Name   string `json:"name,omitempty"`
 		Index  int    `json:"index"`
 		Method string `json:"method"`
@@ -55,13 +59,13 @@ func cmdLs(c *cli, args []string) error {
 	}
 	rows := []reqOut{}
 	for _, e := range all {
-		rows = append(rows, reqOut{e.Ref.Key(), e.Ref.Path, e.Ref.Name, e.Ref.Index, e.Req.Method, c.rd.URL(e.Req.URL, true)})
+		rows = append(rows, reqOut{e.Ref.Key(), e.Ref.Path, e.Ref.File(c.roots()), e.Ref.Name, e.Ref.Index, e.Req.Method, c.rd.URL(e.Req.URL, true)})
 	}
 	if c.asJSON {
 		return c.printJSON(rows)
 	}
 	if len(rows) == 0 {
-		c.printf("No requests. Add some to a .http file, e.g. api.http:\n\n### list users\nGET {{baseUrl}}/users\n")
+		c.printf("No requests. Add some to a .http file in %s (see `barq dir`), e.g. api.http:\n\n### list users\nGET {{baseUrl}}/users\n", c.ws.RequestsDir())
 		return nil
 	}
 	w := 0
@@ -71,6 +75,22 @@ func cmdLs(c *cli, args []string) error {
 	for _, r := range rows {
 		c.printf("%-*s  %-6s %s\n", w, r.Ref, r.Method, r.URL)
 	}
+	return nil
+}
+
+// cmdDir prints the directory where this project's requests are stored.
+func cmdDir(c *cli, args []string) error {
+	fs := c.flags("dir")
+	if _, err := c.parse(fs, args, 0, 0, ""); err != nil {
+		return err
+	}
+	if err := c.open(); err != nil {
+		return err
+	}
+	if c.asJSON {
+		return c.printJSON(map[string]string{"dir": c.ws.RequestsDir()})
+	}
+	c.printf("%s\n", c.ws.RequestsDir())
 	return nil
 }
 
@@ -97,7 +117,7 @@ func cmdShow(c *cli, args []string) error {
 	text := c.rd.Text(httpfile.Format(req))
 	url := c.rd.URL(core.NormalizeURL(resolved.URL), false)
 	if c.asJSON {
-		return c.printJSON(map[string]any{"ref": ref.Key(), "file": ref.Path, "text": text,
+		return c.printJSON(map[string]any{"ref": ref.Key(), "file": ref.File(c.roots()), "text": text,
 			"resolved_url": url, "missing_vars": missing, "confirm": req.Confirm})
 	}
 	c.printf("# %s\n%s", ref.Key(), text)
