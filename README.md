@@ -1,11 +1,11 @@
 # barq
 
-An API client for the terminal: a keyboard- and mouse-driven TUI for people,
+An API client for the terminal: a Neovim-based UI for people,
 and a CLI that lets scripts and AI agents do the same things **without ever
 seeing your secrets**.
 
-Requests, folders, environments and run history are saved per project
-directory in `~/.barq`, never inside the project.
+Requests are `.http` files in your project. Environments, variables and run
+history are saved per project directory in `~/.barq`, never inside the project.
 
 ![barq demo: log in, list users with the captured token, filter with jq, browse runs](assets/demo.gif)
 
@@ -22,43 +22,83 @@ that's on your `PATH`. Check with `barq --version`.
 
 To build from a clone instead: `go build -o barq .`
 
-## The TUI
+## The UI
 
-Run `barq` in a project directory (optionally `barq <url>` or `barq "curl …"`).
+`barq` opens a Neovim-based UI for the project directory: `.http` files | editor | response.
+The editor is an embedded Neovim running your own config. Requires **Neovim 0.10+** on `PATH`.
+`barq <url>` or `barq "curl …"` appends the request to `scratch.http` and opens it.
 
 | Keys | |
 |---|---|
-| `ctrl+p` | command palette: every action, saved request, tab and folder |
-| `alt+u/p/h/b/r/s` | jump to URL / params / headers / body / response / sidebar (also `ctrl+x` + letter) |
-| `ctrl+r`, `enter` in URL | send |
-| `ctrl+s` | save · `ctrl+n` new tab · `ctrl+w` close tab · `alt+←/→` switch tab |
-| `ctrl+x ctrl+e` | edit the focused field in `$EDITOR` |
-| `ctrl+o` | edit the whole request in `$EDITOR` as one `.http` file |
-| `alt+e` / `alt+v` | switch environment / edit its variables |
-| `/` and `\|` in the response | find / jq filter |
-| `/` in the sidebar | filter saved requests |
+| `ctrl+enter` / `alt+enter` | send the request under the cursor (unsaved edits included) |
+| `alt+h` / `alt+l` | focus the pane to the left / right |
+| `alt+e` | cycle environment |
+| `ctrl+p` | `.http` file picker |
+| `ctrl+q` | quit |
+| sidebar: `j` `k` `enter` `n` `R` | move, open, new file, rescan |
+| response: `tab` / `S-tab` | next / previous view |
+| response: `gb` `gh` `gr` `gi` | body / headers / raw / info view |
+| response: `gc` | capture the value under the cursor into a variable |
+| response: `gd` | diff with the previous response |
 
-Features: tabs, folders, environments with `{{variables}}`, query params and
-multipart form-data (`@file`), response history with per-run diffs, captures
-(`token = .data.accessToken` after each successful send), curl import/export,
-OpenAPI 3 import, and live updates when the CLI changes the workspace.
+Editor commands: `:BarqSend`, `:BarqEnv [name]`, `:BarqSave`, `:BarqCurl` (copy as curl),
+`:BarqImportSaved`, `:BarqQuit`.
+
+Requests are plain `.http` files:
+
+```
+### login                          # starts a request; the name is optional
+# @name login
+# @capture token = .data.accessToken
+# @capture requestId = header X-Request-Id   # a response header
+# @capture session = cookie session_id       # a Set-Cookie value
+# @expect status 200
+# @expect jq .data.ok
+# @confirm                         # ask before sending
+POST {{baseUrl}}/login
+Content-Type: application/json
+# X-Debug: 1                       # a commented header is disabled
+
+{"user": "me"}                     # or `< ./payload.json` to use a file
+```
+
+`{{variables}}` come from the current environment. A `< ./payload.json` body
+and `@file` uploads are relative to the project directory (where you started
+barq), not the `.http` file.
+
+File uploads use `multipart/form-data`: with that `Content-Type`, the body is
+one `name: value` field per line (barq adds the boundary itself):
+
+```
+### upload
+POST {{baseUrl}}/upload
+Content-Type: multipart/form-data
+
+name: {{user}}
+avatar: @./images/me.png           # @path = a file
+# note: off                        # a commented field is disabled
+```
 
 ## The CLI (for scripts and AI agents)
+
+Commands: `run`, `ls`, `show`, `curl`, `history`, `env`, `import`, `ai`. A request is
+`file.http#name`, `file.http#n` (1-based block number) or a bare `name` that is unique in the project.
 
 ```sh
 barq ai                                   # the full guide, written for agents
 barq ls --json
-barq new "Auth/Login" --method POST --url '{{baseUrl}}/auth/login' \
-    -H 'Content-Type: application/json' --body @login.json \
-    --capture token=.data.accessToken
-barq run "Auth/Login"                     # stores {{token}} as a secret
-barq run "Orders/List orders" --jq '.data[0]' --json
+barq run auth.http#login                  # stores {{token}} as a secret
+barq run "list orders" --jq '.data[0]' --json
+barq show auth.http#2
 barq env set dev token - --secret         # value from stdin
 barq import openapi.json
+barq import --saved                       # write old saved requests out as .http files
 ```
 
+Edit the `.http` files directly to add or change requests.
+
 **Large responses.** Bodies are kept whole, in history too, scrubbed of
-secrets. The TUI shows the first 10 MB, and `barq run` prints the first 1 MB
+secrets. The UI shows the first 10 MB, and `barq run` prints the first 1 MB
 and says where the rest is. Read it with `barq history body <run-id>` and
 `--jq`, `--grep`, `--lines`, `--bytes` or `--path`, or save it with
 `barq run … -o file`. Reading stops at 1 GB by default (`--max-body`,
@@ -73,7 +113,7 @@ To let an agent such as Claude Code use it, add to the project's `CLAUDE.md`:
 ## Secrets
 
 - Variables named like credentials (`token`, `password`, `api_key`, …), or
-  marked secret (`ctrl+l` in the variables editor, `--secret` in the CLI),
+  marked secret (`--secret` in the CLI),
   are stored in the OS keyring (Secret Service/KWallet, Keychain, Credential
   Manager). Set `BARQ_KEYRING=off` to keep them in the workspace file instead
   (barq shows a warning in the title bar).
@@ -107,14 +147,14 @@ those.
 ## Code layout
 
 ```
-main.go          starts the CLI or the TUI
-internal/core    workspaces, environments, secrets, history, sending,
-                 redaction, curl and OpenAPI import (no UI code)
-internal/cli     the `barq <command>` interface
-internal/tui     the Bubble Tea interface
+main.go            starts the CLI or the UI
+internal/core      workspaces, environments, secrets, history, sending,
+                   redaction, curl and OpenAPI import (no UI code)
+internal/httpfile  the .http format
+internal/runner    sending a request: env, captures, expects, history
+internal/cli       the `barq <command>` interface
+internal/ntui      the Neovim-based UI (with internal/nvimpane)
 ```
-
-`cli` and `tui` both build on `core`; `core` imports neither.
 
 ## License
 

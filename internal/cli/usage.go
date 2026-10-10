@@ -3,17 +3,24 @@ package cli
 const Usage = `barq — an API client for the terminal
 
 Usage:
-  barq [url | "curl …"]        open the TUI for this directory's workspace
-  barq <command> [flags]       do the same from scripts and AI agents
+  barq                         open the UI (needs nvim 0.10+)
+  barq [url | "curl …"]        add the request to scratch.http and open the UI
+  barq <command> [flags]       run requests from scripts and AI agents
+
+Requests live in .http files in the project:
+
+  ### list users
+  GET {{baseUrl}}/users
+
+Refer to one as file.http#name, file.http#n, or just its name when unique.
 
 Commands:
-  ls, show, new, set, mkdir, mv, rename, rm     requests and folders
-  run, history                                  send requests, past runs
-  env                                           environments and variables
-  curl                                          print a request as curl
-  import                                        import an OpenAPI 3 spec
-  ai                                            the full guide for AI agents
+  ls, show                  list requests, show one with its resolved URL
+  run, curl, history        send a request, print it as curl, past runs
+  env                       environments and variables
+  import                    import an OpenAPI 3 spec (or --saved: the old store)
+  ai                        the full guide for AI agents
 
-Workspaces are per directory and stored in ~/.barq/workspaces.
+Environments and history are per directory, stored in ~/.barq/workspaces.
 Secret values live in the OS keyring and are never printed.
 `

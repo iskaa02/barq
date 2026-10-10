@@ -1,0 +1,218 @@
+package ntui
+
+import (
+	"fmt"
+	"path/filepath"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/iskaa02/barq/internal/core"
+	"github.com/iskaa02/barq/internal/nvimpane"
+	"github.com/iskaa02/barq/internal/runner"
+)
+
+// update is the message switch; handlers for posted messages go here.
+func (a *App) update(msg tea.Msg) tea.Cmd {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		a.w, a.h = msg.Width, msg.Height
+		a.applySizes()
+	case inMsg:
+		return tea.Batch(a.wait(), a.update(msg.msg))
+	case runMsg:
+		return msg(a)
+	case nvimpane.RedrawMsg:
+		if msg.Pane == a.ed || msg.Pane == a.rp {
+			return msg.Pane.Wait()
+		}
+	case nvimpane.ExitedMsg:
+		switch msg.Pane {
+		case a.ed:
+			return a.restartEditor()
+		case a.rp:
+			return a.restartResponse()
+		}
+	case tea.PasteMsg:
+		if a.modal == nameModal {
+			var cmd tea.Cmd
+			a.input, cmd = a.input.Update(msg)
+			return cmd
+		}
+		if p := a.focused(); p != nil && a.modal == noModal {
+			p.Paste(msg.Content)
+		}
+	case tea.KeyPressMsg:
+		return a.key(msg)
+	case tickMsg:
+		if a.sending {
+			a.spin++
+			return tick()
+		}
+	case syncMsg:
+		a.syncFromDisk()
+		return syncTick()
+	case respMsg:
+		a.onResponse(msg)
+	case sendMsg:
+		return a.send()
+	case envMsg:
+		a.setEnv(msg.ref)
+	case envEditMsg:
+		a.envEdit(msg.name)
+	case envSaveMsg:
+		a.envSave(msg.name, msg.lines)
+	case envNewMsg:
+		a.envNew(msg.name)
+	case envDeleteMsg:
+		a.envDelete(msg.name)
+	case quitMsg:
+		return a.quit()
+	case bufsMsg:
+		a.tabs = msg.tabs
+	case savedMsg:
+		a.rescan()
+	case changedMsg:
+		a.assistBufferChanged(msg.path)
+	case curlMsg:
+		a.copyCurl()
+	case importMsg:
+		a.importSaved()
+	}
+	return nil
+}
+
+func (a *App) quit() tea.Cmd {
+	if !a.quitArmed {
+		for _, t := range a.tabs {
+			if t.Mod {
+				a.quitArmed = true
+				a.flashErr("unsaved changes in " + filepath.Base(t.Path) + " — quit again to discard")
+				return nil
+			}
+		}
+	}
+	return tea.Quit
+}
+
+func (a *App) key(msg tea.KeyPressMsg) tea.Cmd {
+	if a.modal != noModal {
+		return a.modalKey(msg)
+	}
+	s := msg.String()
+	if s != "ctrl+q" {
+		a.quitArmed = false
+	}
+	a.notice = ""
+	switch s {
+	case "ctrl+q":
+		return a.quit()
+	case "alt+h":
+		a.setFocus(max(a.focus-1, focusSide))
+		return nil
+	case "alt+l":
+		a.setFocus(min(a.focus+1, focusResp))
+		return nil
+	case "alt+e":
+		a.cycleEnv()
+		return nil
+	case "alt+v":
+		a.envEdit("")
+		return nil
+	case "ctrl+enter", "alt+enter":
+		return a.send()
+	}
+	if p := a.focused(); p != nil {
+		p.Key(msg)
+		return nil
+	}
+	return a.sideKey(s)
+}
+
+func (a *App) sideKey(s string) tea.Cmd {
+	switch s {
+	case "j", "down":
+		a.side.move(1)
+	case "k", "up":
+		a.side.move(-1)
+	case "R":
+		a.rescan()
+	case "n":
+		a.modal = nameModal
+		a.input.Reset()
+		a.input.Placeholder = "name.http"
+		return a.input.Focus()
+	case "enter":
+		e, ok := a.side.selected()
+		if !ok || e.Kind == dirEntry {
+			return nil
+		}
+		line := -1
+		if e.Kind == reqEntry {
+			line = e.Line
+		}
+		if err := a.openAt(e.Path, line); err != nil {
+			a.flashErr(err.Error())
+			return nil
+		}
+		a.setFocus(focusEditor)
+	}
+	return nil
+}
+
+func (a *App) modalKey(msg tea.KeyPressMsg) tea.Cmd {
+	s := msg.String()
+	switch a.modal {
+	case confirmModal:
+		p := a.pending
+		a.modal, a.pending = noModal, nil
+		if s == "y" || s == "Y" || s == "enter" {
+			return a.dispatch(p)
+		}
+	case nameModal:
+		switch s {
+		case "esc", "ctrl+c":
+			a.modal = noModal
+		case "enter":
+			a.modal = noModal
+			if err := a.createFile(a.input.Value()); err != nil {
+				a.flashErr(err.Error())
+			}
+		default:
+			var cmd tea.Cmd
+			a.input, cmd = a.input.Update(msg)
+			return cmd
+		}
+	}
+	return nil
+}
+
+func (a *App) copyCurl() {
+	_, req, _, err := a.CurrentRequest()
+	if err != nil {
+		a.flashErr(err.Error())
+		return
+	}
+	env := a.ws.ActiveEnv
+	text, err := curlFor(req, a.cwd, func(r core.Request) (core.Request, []string) {
+		return a.ws.Resolve(env, r, nil)
+	})
+	if err != nil {
+		a.flashErr(err.Error())
+		return
+	}
+	a.flash(copyText(text, "curl"))
+}
+
+func (a *App) importSaved() {
+	written, skipped, warnings, err := runner.ImportSavedWarn(a.cwd, a.ws)
+	if err != nil {
+		a.flashErr(err.Error())
+		return
+	}
+	a.rescan()
+	msg := fmt.Sprintf("imported %d requests into requests/ (%d already there)", written, skipped)
+	if len(warnings) > 0 {
+		// The details are kept as ## comments in the written files.
+		msg += fmt.Sprintf(" · %d need attention (see ## comments): %s", len(warnings), warnings[0])
+	}
+	a.flash(msg)
+}

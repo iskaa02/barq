@@ -15,20 +15,24 @@ import (
 	"time"
 
 	"github.com/iskaa02/barq/internal/core"
+	"github.com/iskaa02/barq/internal/httpfile"
+	"github.com/iskaa02/barq/internal/runner"
 )
 
 type runJSON struct {
-	RunID      string             `json:"run_id,omitempty"`
-	Request    string             `json:"request"`
-	Env        string             `json:"env,omitempty"`
-	Status     string             `json:"status"`
-	Code       int                `json:"code"`
-	DurationMS int64              `json:"duration_ms"`
-	Size       int64              `json:"size"` // of the whole body
-	Headers    map[string]string  `json:"headers,omitempty"`
-	Body       any                `json:"body"` // parsed when JSON, else a string
-	Captured   []core.CapturedVar `json:"captured,omitempty"`
-	Redacted   bool               `json:"redacted"`
+	RunID         string             `json:"run_id,omitempty"`
+	Request       string             `json:"request"`
+	Env           string             `json:"env,omitempty"`
+	Status        string             `json:"status"`
+	Code          int                `json:"code"`
+	DurationMS    int64              `json:"duration_ms"`
+	Size          int64              `json:"size"` // of the whole body
+	Headers       map[string]string  `json:"headers,omitempty"`
+	Body          any                `json:"body"` // parsed when JSON, else a string
+	Captured      []core.CapturedVar `json:"captured,omitempty"`
+	Expects       int                `json:"expects,omitempty"`
+	FailedExpects []string           `json:"failed_expects,omitempty"`
+	Redacted      bool               `json:"redacted"`
 	// Partial is set when body holds only the start of the whole body,
 	// which `barq history body` reads (body_file is a scrubbed copy).
 	Partial    bool   `json:"partial,omitempty"`
@@ -40,23 +44,23 @@ type runJSON struct {
 	duration time.Duration // for human output, finer than DurationMS
 }
 
-// cmdRun sends a saved request (or an ad-hoc one with --curl), records it
-// in history, applies captures and prints the response, redacted.
+// cmdRun sends a request from a .http file, records it in history, applies
+// its captures, checks its expectations and prints the response, redacted.
 func cmdRun(c *cli, args []string) error {
 	fs := c.flags("run")
 	envName := fs.String("env", "", "environment (default: the active one)")
 	var vars, caps multi
 	fs.Var(&vars, "var", "override a variable for this run: key=value (repeatable)")
 	fs.Var(&caps, "capture", "also store part of the response: var=jq-filter (repeatable)")
-	curl := fs.String("curl", "", "send a curl command instead of a saved request")
 	filter := fs.String("jq", "", "show only this jq filter of the body")
 	include := fs.Bool("i", false, "include response headers")
 	fail := fs.Bool("fail", false, "exit with status 3 on HTTP 400 and above")
+	yes := fs.Bool("yes", false, "skip the prompt of a request marked @confirm (protected environments still need a person)")
 	timeout := fs.Duration("timeout", 30*time.Second, "give up after this long")
 	output := fs.String("o", "", "write the whole body to this file (redacted unless --reveal) instead of printing it")
 	maxBody := fs.String("max-body", "", "stop reading the body after this much, e.g. 50MB or 2GB; 0 for no limit (default 1GB)")
 	fs.BoolVar(&c.reveal, "reveal", false, "show secret values (needs a person at a terminal)")
-	pos, err := c.parse(fs, args, 0, 1, "<request> [--env E] [--var k=v]… [--capture var=filter]… [--jq F] [-i] [-o FILE] [--max-body SIZE] [--fail]")
+	pos, err := c.parse(fs, args, 1, 1, "<ref> [--env E] [--var k=v]… [--capture var=filter]… [--jq F] [-i] [-o FILE] [--max-body SIZE] [--fail] [--yes]")
 	if err != nil {
 		return err
 	}
@@ -68,112 +72,82 @@ func cmdRun(c *cli, args []string) error {
 	if *output != "" && *filter != "" {
 		return usagef("-o writes the whole body; use --jq without it")
 	}
-	if (len(pos) == 1) == (*curl != "") {
-		return usagef("give either a saved request or --curl '…'")
-	}
 	if err := c.open(); err != nil {
 		return err
 	}
 	if err := c.checkReveal(); err != nil {
 		return err
 	}
-
-	// What to send.
-	var typed core.Request
-	key, name := "cli", "curl"
-	if *curl != "" {
-		cr, _, err := core.ParseCurl(*curl)
-		if err != nil {
-			return err
-		}
-		typed = core.Request{Method: cr.Method, URL: cr.URL, Headers: core.ToSavedHeaders(cr.Headers), Body: cr.Body}
-		if len(cr.Form) > 0 {
-			typed.BodyMode, typed.Form = core.BodyForm, core.ToSavedHeaders(cr.Form)
-		}
-	} else {
-		id, err := c.ws.FindRequestRef(pos[0])
-		if err != nil {
-			return err
-		}
-		typed = c.ws.Requests[c.ws.Find(id)]
-		key, name = id, typed.DisplayName()
+	ref, req, err := c.find(pos[0])
+	if err != nil {
+		return err
 	}
-	var allCaps []core.Capture
-	allCaps = append(allCaps, typed.Captures...)
+	opts := runner.Opts{Vars: map[string]string{}}
 	for _, spec := range caps {
 		cp, err := core.ParseCapture(strings.Replace(spec, "=", " = ", 1))
 		if err != nil {
 			return usagef("--capture %q: %v", spec, err)
 		}
-		allCaps = append(allCaps, cp)
+		opts.Captures = append(opts.Captures, cp)
 	}
-
-	// Where to send it.
 	envID, err := c.envID(*envName)
 	if err != nil {
 		return err
 	}
-	env, _ := c.ws.Env(envID)
-	overrides := map[string]string{}
 	for _, v := range vars {
 		k, val, err := splitKV(v, "=", "--var")
 		if err != nil {
 			return err
 		}
-		overrides[k] = val
+		opts.Vars[k] = val
 	}
-	sent, missing := c.ws.Resolve(envID, typed, overrides)
-	if len(missing) > 0 {
-		return fmt.Errorf("undefined variable(s): {{%s}}; set them with `barq env set` or --var", strings.Join(missing, "}}, {{"))
-	}
-	if env.NeedsConfirm(sent.Method) {
-		if err := c.confirm(fmt.Sprintf("Sending %s in the protected environment %q", name, env.Name), c.sendSummary(sent)...); err != nil {
+	env, _ := c.ws.Env(envID)
+	if runner.NeedsConfirm(c.ws, envID, req) && !(*yes && !runner.EnvNeedsConfirm(c.ws, envID, req)) {
+		what := fmt.Sprintf("Sending %s", ref.Key())
+		if env != nil {
+			what += fmt.Sprintf(" to %q", env.Name)
+		}
+		if err := c.confirm(what, c.sendSummary(envID, req, opts.Vars)...); err != nil {
 			return err
 		}
 	}
 
-	// Send, record, capture.
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-	hist, _ := core.OpenHistory(c.ws)
-	run := c.ws.NewRun(key, name, envID, typed, sent)
-	resp, sendErr := core.RunRequest(ctx, sent, c.ws.CWD)
-	defer resp.Close()
-	// Capture first, so a token taken from this response is already a
-	// secret when the run is scrubbed and recorded.
-	var captured []core.CapturedVar
-	if sendErr == nil && len(allCaps) > 0 && resp.StatusCode < 400 {
-		captured = core.EvalCaptures(allCaps, resp)
-		if err := c.mutate(func(w *core.Workspace) error { return w.StoreCaptured(envID, captured) }); err != nil {
+	res, err := runner.Send(ctx, c.ws, envID, c.root(), ref, req, opts)
+	c.rd = core.NewRedactor(c.ws)
+	if err != nil {
+		if res.Resp == nil && res.RunID == "" {
+			return err // never sent
+		}
+		if c.reveal {
 			return err
 		}
+		return fmt.Errorf("%s", c.rd.Text(err.Error()))
 	}
-	if err := c.ws.RecordRun(hist, run, resp, sendErr); err != nil {
-		fmt.Fprintf(c.err, "barq: warning: couldn't record history: %v\n", err)
+	resp := res.Resp
+	defer resp.Close()
+	c.rd = res.Redactor
+	if res.CaptureErr != nil {
+		fmt.Fprintf(c.err, "warning: captures not stored: %v\n", res.CaptureErr)
 	}
-	if sendErr != nil {
-		if c.reveal {
-			return sendErr
-		}
-		return fmt.Errorf("%s", c.rd.Text(sendErr.Error()))
-	}
-	// Redact with the secrets known now, including ones just captured.
-	c.rd = core.NewRedactor(c.ws)
 
 	var out runJSON
 	if *output != "" {
-		out = c.runOut(run.Meta.ID, name, env, resp, "", *include, true)
+		out = c.runOut(res.RunID, ref.Key(), env, resp, "", *include, true)
 		if err := c.writeBody(resp, *output); err != nil {
 			return err
 		}
 		out.Body, out.Output = nil, *output
 	} else {
-		out = c.runOut(run.Meta.ID, name, env, resp, *filter, *include, false)
-		if out.Partial && hist != nil {
-			out.BodyFile = hist.BodyPath(run.Meta.ID)
+		out = c.runOut(res.RunID, ref.Key(), env, resp, *filter, *include, false)
+		if out.Partial {
+			if hist, _ := core.OpenHistory(c.ws); hist != nil {
+				out.BodyFile = hist.BodyPath(res.RunID)
+			}
 		}
 	}
-	out.Captured = captured
+	out.Captured, out.Expects, out.FailedExpects = res.Captured, res.Expects, res.Fails
 	if c.asJSON {
 		if err := c.printJSON(out); err != nil {
 			return err
@@ -181,31 +155,37 @@ func cmdRun(c *cli, args []string) error {
 	} else {
 		c.printRun(out, *include)
 	}
-	if *fail && resp.StatusCode >= 400 {
+	switch {
+	case len(res.Fails) > 0:
+		if !c.asJSON {
+			for _, f := range res.Fails {
+				fmt.Fprintf(c.err, "expect failed: %s\n", f)
+			}
+		}
+		return exitCode(4)
+	case *fail && resp.StatusCode >= 400:
 		return exitCode(3)
 	}
 	return nil
 }
 
-// sendSummary describes a resolved request for a person to confirm:
-// method, the real URL (secrets still hidden) and what goes in the body.
-func (c *cli) sendSummary(r core.Request) []string {
+// sendSummary describes a request for a person to confirm: method, the
+// real URL (secrets still hidden) and what goes in the body.
+func (c *cli) sendSummary(envID string, req httpfile.Request, vars map[string]string) []string {
+	r, missing := c.ws.Resolve(envID, req.Core(), vars)
+	if len(missing) > 0 {
+		r = req.Core()
+	}
 	method := strings.ToUpper(r.Method)
 	if method == "" {
 		method = "GET"
 	}
-	lines := []string{method + " " + c.rd.URL(core.NormalizeURL(r.URL), false)}
+	lines := []string{method + " " + c.rd.URL(core.NormalizeURL(r.URL), len(missing) > 0)}
 	switch {
-	case r.BodyMode == core.BodyForm:
-		n := 0
-		for _, f := range r.Form {
-			if f.Enabled {
-				n++
-			}
-		}
-		lines = append(lines, fmt.Sprintf("body: form with %d field(s)", n))
-	case r.Body != "":
-		lines = append(lines, "body: "+core.HumanSize(len(r.Body)))
+	case req.BodyFile != "":
+		lines = append(lines, "body: file "+req.BodyFile)
+	case req.Body != "":
+		lines = append(lines, "body: "+core.HumanSize(len(req.Body)))
 	}
 	return lines
 }
@@ -352,7 +332,7 @@ func cmdHistory(c *cli, args []string) error {
 	fs := c.flags("history")
 	limit := fs.Int("n", 20, "how many runs to list")
 	fs.BoolVar(&c.reveal, "reveal", false, "show secret values (needs a person at a terminal)")
-	pos, err := c.parse(fs, args, 0, 2, "[request] | show <run-id>")
+	pos, err := c.parse(fs, args, 0, 2, "[ref] | show <run-id>")
 	if err != nil {
 		return err
 	}
@@ -370,16 +350,16 @@ func cmdHistory(c *cli, args []string) error {
 		return c.showRun(hist, pos[1])
 	}
 	if len(pos) == 2 {
-		return usagef("usage: barq history [request] | barq history show <run-id> | barq history body <run-id>")
+		return usagef("usage: barq history [ref] | barq history show <run-id> | barq history body <run-id>")
 	}
 
 	runs := hist.All()
 	if len(pos) == 1 {
-		id, err := c.ws.FindRequestRef(pos[0])
-		if err != nil {
-			return err
+		key := pos[0]
+		if ref, _, err := c.find(key); err == nil {
+			key = ref.Key()
 		}
-		runs = hist.ForKey(id)
+		runs = hist.ForKey(key)
 	}
 	if len(runs) > *limit {
 		runs = runs[:*limit]
@@ -398,10 +378,7 @@ func cmdHistory(c *cli, args []string) error {
 	}
 	rows := []runRow{}
 	for _, r := range runs {
-		name := r.Name
-		if i := c.ws.Find(r.Key); i >= 0 {
-			name = c.ws.SlashPath(core.Ref{ID: r.Key})
-		}
+		name := r.Key
 		prev, ok := hist.Previous(r.ID)
 		rows = append(rows, runRow{r.ID, name, r.Time, r.Method, r.Code, r.Status, c.rd.Text(r.Error),
 			r.Duration.Milliseconds(), r.Env, ok && prev.ReqHash != r.ReqHash})

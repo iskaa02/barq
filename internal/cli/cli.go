@@ -16,7 +16,7 @@ import (
 	"github.com/iskaa02/barq/internal/core"
 )
 
-// The CLI does everything the TUI does, for scripts and AI agents. Output
+// The CLI runs the requests of a project's .http files, for scripts and AI agents. Output
 // is plain text by default and JSON with --json. Secrets are never printed:
 // see core/redact.go. Anything that would reveal or risk them (--reveal,
 // protected environments) needs a person at an interactive terminal.
@@ -30,14 +30,8 @@ var cliCommands map[string]cliCommand
 
 func init() {
 	cliCommands = map[string]cliCommand{
-		"ls":      {cmdLs, "list folders and requests"},
-		"show":    {cmdShow, "show a request (secrets redacted)"},
-		"new":     {cmdNew, "create a request"},
-		"set":     {cmdSet, "change a request"},
-		"mkdir":   {cmdMkdir, "create folders"},
-		"mv":      {cmdMv, "move a request or folder"},
-		"rename":  {cmdRename, "rename a request or folder"},
-		"rm":      {cmdRm, "delete a request or folder"},
+		"ls":      {cmdLs, "list requests in .http files"},
+		"show":    {cmdShow, "show a request and its resolved URL"},
 		"run":     {cmdRun, "send a request"},
 		"history": {cmdHistory, "list or show past runs"},
 		"env":     {cmdEnv, "manage environments and variables"},
@@ -259,71 +253,6 @@ func fieldsJSON(hs []core.SavedHeader) []fieldJSON {
 		out = append(out, fieldJSON{h.Key, h.Value, h.Enabled})
 	}
 	return out
-}
-
-type requestJSON struct {
-	ID             string         `json:"id"`
-	Path           string         `json:"path"`
-	Folder         string         `json:"folder"`
-	Name           string         `json:"name"`
-	Method         string         `json:"method"`
-	URL            string         `json:"url"`
-	Headers        []fieldJSON    `json:"headers"`
-	DisabledParams []fieldJSON    `json:"disabled_params,omitempty"`
-	BodyMode       string         `json:"body_mode"`
-	Body           string         `json:"body,omitempty"`
-	Form           []fieldJSON    `json:"form,omitempty"`
-	Captures       []core.Capture `json:"captures,omitempty"`
-}
-
-// requestOut is a saved request as the CLI shows it, redacted.
-func (c *cli) requestOut(r core.Request) requestJSON {
-	shown := r
-	if !c.reveal {
-		shown = c.rd.Request(r, true)
-	}
-	mode := "raw"
-	if r.BodyMode == core.BodyForm {
-		mode = "form"
-	}
-	return requestJSON{
-		ID: r.ID, Path: c.ws.SlashPath(core.Ref{ID: r.ID}), Folder: strings.Join(core.SplitPath(c.ws.FolderPath(r.Folder)), "/"),
-		Name: r.DisplayName(), Method: r.Method, URL: shown.URL, Headers: fieldsJSON(shown.Headers),
-		DisabledParams: fieldsJSON(shown.DisabledParams), BodyMode: mode, Body: shown.Body,
-		Form: fieldsJSON(shown.Form), Captures: r.Captures,
-	}
-}
-
-func (c *cli) printRequest(r core.Request) {
-	j := c.requestOut(r)
-	c.printf("%s %s\n", j.Method, j.URL)
-	c.printf("id:   %s\npath: %s\n", j.ID, j.Path)
-	printFields := func(title string, fs []fieldJSON) {
-		if len(fs) == 0 {
-			return
-		}
-		c.printf("%s:\n", title)
-		for _, f := range fs {
-			off := ""
-			if !f.Enabled {
-				off = "  (off)"
-			}
-			c.printf("  %s: %s%s\n", f.Key, f.Value, off)
-		}
-	}
-	printFields("headers", j.Headers)
-	printFields("params (off)", j.DisabledParams)
-	if j.BodyMode == "form" {
-		printFields("form-data", j.Form)
-	} else if j.Body != "" {
-		c.printf("body:\n%s\n", indent(j.Body, "  "))
-	}
-	if len(j.Captures) > 0 {
-		c.printf("captures:\n")
-		for _, cp := range j.Captures {
-			c.printf("  %s\n", cp)
-		}
-	}
 }
 
 func indent(s, prefix string) string {
