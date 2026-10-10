@@ -283,13 +283,14 @@ func (a *App) content() string {
 		return ""
 	}
 	sw, ew, rw, bh := a.layout()
-	open := ""
+	open, openSet := "", map[string]bool{}
 	for _, t := range a.tabs {
+		openSet[t.Path] = true
 		if t.Cur {
 			open = t.Path
 		}
 	}
-	side := box("files", sw, bh, a.side.render(sw-2, bh-2, a.focus == focusSide, open), a.focus == focusSide)
+	side := box(a.side.title(), sw, bh, a.side.render(sw-2, bh-2, a.focus == focusSide, openSet), a.focus == focusSide)
 	edLines := strings.Split(a.ed.View(), "\n")
 	if !a.ownTabline {
 		edLines = append([]string{a.tabBar(ew - 2)}, edLines...)

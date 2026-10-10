@@ -68,6 +68,11 @@ func (a *App) update(msg tea.Msg) tea.Cmd {
 		return a.quit()
 	case bufsMsg:
 		a.tabs = msg.tabs
+	case cursorMsg:
+		a.side.setActive(msg.path, msg.line)
+		if a.focus != focusSide {
+			a.side.reveal()
+		}
 	case savedMsg:
 		a.rescan()
 	case changedMsg:
@@ -124,15 +129,41 @@ func (a *App) key(msg tea.KeyPressMsg) tea.Cmd {
 		p.Key(msg)
 		return nil
 	}
-	return a.sideKey(s)
+	return a.sideKey(msg)
 }
 
-func (a *App) sideKey(s string) tea.Cmd {
+func (a *App) sideKey(msg tea.KeyPressMsg) tea.Cmd {
+	s := msg.String()
+	if a.side.filtering {
+		if s == "enter" {
+			a.side.filtering = false
+			return a.openSelected()
+		}
+		if s == "esc" {
+			a.side.filtering = false
+			a.side.clearFilter()
+			return nil
+		}
+		a.side.filterKey(s, msg.Text)
+		return nil
+	}
 	switch s {
 	case "j", "down":
 		a.side.move(1)
 	case "k", "up":
 		a.side.move(-1)
+	case "g", "home":
+		a.side.cur = 0
+	case "G", "end":
+		a.side.cur = max(len(a.side.rows)-1, 0)
+	case "h", "left":
+		a.side.left()
+	case "l", "right":
+		a.side.right()
+	case "/":
+		a.side.filtering = true
+	case "esc":
+		a.side.clearFilter()
 	case "R":
 		a.rescan()
 	case "n":
@@ -141,20 +172,27 @@ func (a *App) sideKey(s string) tea.Cmd {
 		a.input.Placeholder = "name.http"
 		return a.input.Focus()
 	case "enter":
-		e, ok := a.side.selected()
-		if !ok || e.Kind == dirEntry {
-			return nil
-		}
-		line := -1
-		if e.Kind == reqEntry {
-			line = e.Line
-		}
-		if err := a.openAt(e.Path, line); err != nil {
-			a.flashErr(err.Error())
-			return nil
-		}
-		a.setFocus(focusEditor)
+		return a.openSelected()
 	}
+	return nil
+}
+
+// openSelected is enter on the sidebar: fold a directory or file, or open a
+// request at its line and focus the editor.
+func (a *App) openSelected() tea.Cmd {
+	r, ok := a.side.selected()
+	if !ok {
+		return nil
+	}
+	if r.Kind != reqEntry {
+		a.side.toggle(r)
+		return nil
+	}
+	if err := a.openAt(r.Path, r.Line); err != nil {
+		a.flashErr(err.Error())
+		return nil
+	}
+	a.setFocus(focusEditor)
 	return nil
 }
 

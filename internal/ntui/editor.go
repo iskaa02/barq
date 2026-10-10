@@ -23,6 +23,10 @@ type (
 	bufsMsg    struct{ tabs []tab }
 	savedMsg   struct{ path string }
 	changedMsg struct{ path string }
+	cursorMsg  struct {
+		path string
+		line int // 0-based
+	}
 )
 
 // editorLua installs the autocmds and :Barq* commands. Argument: our channel.
@@ -49,6 +53,17 @@ vim.api.nvim_create_autocmd('BufWritePost', {
 vim.api.nvim_create_autocmd({ 'TextChanged', 'TextChangedI', 'BufEnter' }, {
   group = g, pattern = '*.http',
   callback = function(a) notify('barq_changed', vim.api.nvim_buf_get_name(a.buf)) end })
+
+local timer = vim.uv.new_timer()
+vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI', 'BufEnter' }, {
+  group = g, pattern = '*.http',
+  callback = function(a)
+    timer:stop()
+    timer:start(60, 0, vim.schedule_wrap(function()
+      if vim.api.nvim_get_current_buf() ~= a.buf or not vim.api.nvim_buf_is_valid(a.buf) then return end
+      notify('barq_cursor', vim.api.nvim_buf_get_name(a.buf), vim.api.nvim_win_get_cursor(0)[1] - 1)
+    end))
+  end })
 
 local function cmd(name, fn, opts) vim.api.nvim_create_user_command(name, fn, opts or {}) end
 cmd('BarqSend', function() notify('barq_send') end)
@@ -85,6 +100,7 @@ func (a *App) startEditor(files []string) error {
 		"barq_env":     func(ref string) { a.post(envMsg{strings.TrimSpace(ref)}) },
 		"barq_saved":   func(path string) { a.post(savedMsg{path}) },
 		"barq_changed": func(path string) { a.post(changedMsg{path}) },
+		"barq_cursor":  func(path string, line int) { a.post(cursorMsg{path, line}) },
 		"barq_bufs": func(js string) {
 			var tabs []tab
 			_ = json.Unmarshal([]byte(js), &tabs) // an empty Lua table may encode as {}

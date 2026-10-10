@@ -35,8 +35,8 @@ func TestScanFiles(t *testing.T) {
 		got = append(got, strings.Repeat(" ", e.Depth)+e.Label)
 	}
 	want := []string{
-		"a.http", " login", " GET http://x/me",
-		"api/", " v1/", "  b.http", "   GET http://x/b",
+		"a.http", " login", " /me",
+		"api/", " v1/", "  b.http", "   /b",
 	}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("got %q\nwant %q", got, want)

@@ -15,6 +15,16 @@ var (
 	okStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	boldStyle    = lipgloss.NewStyle().Bold(true)
 	selStyle     = lipgloss.NewStyle().Reverse(true)
+
+	// The sidebar's palette (ANSI colours, so it follows the terminal theme).
+	colAccent  = lipgloss.Color("12")
+	colGreen   = lipgloss.Color("10")
+	colYellow  = lipgloss.Color("11")
+	colBlue    = lipgloss.Color("12")
+	colRed     = lipgloss.Color("9")
+	colCyan    = lipgloss.Color("14")
+	accent     = lipgloss.NewStyle().Foreground(colAccent)
+	accentBold = accent.Bold(true)
 )
 
 // fit truncates or pads s to exactly w cells.
