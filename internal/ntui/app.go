@@ -29,12 +29,9 @@ package ntui
 
 import (
 	"fmt"
-	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -68,6 +65,7 @@ type App struct {
 	cwd   string       // the project directory: "< file" and @file paths are relative to it
 	store string       // ~/.barq/requests/<project>: where new requests go
 	in    chan tea.Msg // messages from RPC goroutines
+	diag  *diag        // freeze log (nil when ~/.barq/barq.log can't be opened)
 
 	mu         sync.Mutex // guards the snapshots below
 	envName    string
@@ -182,13 +180,8 @@ vim.schedule(function() pcall(vim.api.nvim_win_set_cursor, 0, { l, 0 }); vim.cmd
 	a.ed.SetFocused(a.focus == focusEditor)
 
 	p := tea.NewProgram(a)
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
-	defer signal.Stop(sig)
-	go func() {
-		<-sig
-		p.Quit()
-	}()
+	a.diag = startDiag()
+	defer a.diag.onSignals(p.Quit)()
 	_, err := p.Run()
 	return err
 }
@@ -198,6 +191,7 @@ func (a *App) Init() tea.Cmd {
 }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	a.diag.heartbeat()
 	cmd := a.update(msg)
 	return a, cmd
 }
