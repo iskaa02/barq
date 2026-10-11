@@ -18,6 +18,7 @@ type (
 	sendMsg    struct{}
 	curlMsg    struct{}
 	importMsg  struct{}
+	curlInMsg  struct{ text string }
 	quitMsg    struct{}
 	envMsg     struct{ ref string }
 	bufsMsg    struct{ tabs []tab }
@@ -74,6 +75,12 @@ cmd('BarqEnv', function(o) notify('barq_env', o.args) end, {
   end })
 cmd('BarqSave', function() vim.cmd('write') end)
 cmd('BarqCurl', function() notify('barq_curl') end)
+cmd('BarqImportCurl', function(o)
+  local text = o.args
+  if vim.trim(text) == '' then text = vim.fn.getreg('+') end
+  if vim.trim(text) == '' then text = vim.fn.getreg('"') end
+  notify('barq_import_curl', text)
+end, { nargs = '*' })
 cmd('BarqImportSaved', function() notify('barq_import') end)
 cmd('BarqQuit', function() notify('barq_quit') end)
 vim.o.hidden = true
@@ -93,14 +100,15 @@ func (a *App) startEditor(files []string) error {
 	}
 	a.ed = p
 	handlers := map[string]any{
-		"barq_send":    func() { a.post(sendMsg{}) },
-		"barq_curl":    func() { a.post(curlMsg{}) },
-		"barq_import":  func() { a.post(importMsg{}) },
-		"barq_quit":    func() { a.post(quitMsg{}) },
-		"barq_env":     func(ref string) { a.post(envMsg{strings.TrimSpace(ref)}) },
-		"barq_saved":   func(path string) { a.post(savedMsg{path}) },
-		"barq_changed": func(path string) { a.post(changedMsg{path}) },
-		"barq_cursor":  func(path string, line int) { a.post(cursorMsg{path, line}) },
+		"barq_send":        func() { a.post(sendMsg{}) },
+		"barq_curl":        func() { a.post(curlMsg{}) },
+		"barq_import":      func() { a.post(importMsg{}) },
+		"barq_import_curl": func(text string) { a.post(curlInMsg{text}) },
+		"barq_quit":        func() { a.post(quitMsg{}) },
+		"barq_env":         func(ref string) { a.post(envMsg{strings.TrimSpace(ref)}) },
+		"barq_saved":       func(path string) { a.post(savedMsg{path}) },
+		"barq_changed":     func(path string) { a.post(changedMsg{path}) },
+		"barq_cursor":      func(path string, line int) { a.post(cursorMsg{path, line}) },
 		"barq_bufs": func(js string) {
 			var tabs []tab
 			_ = json.Unmarshal([]byte(js), &tabs) // an empty Lua table may encode as {}

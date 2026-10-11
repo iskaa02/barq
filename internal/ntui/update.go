@@ -3,6 +3,7 @@ package ntui
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/iskaa02/barq/internal/core"
@@ -81,6 +82,8 @@ func (a *App) update(msg tea.Msg) tea.Cmd {
 		a.copyCurl()
 	case importMsg:
 		a.importSaved()
+	case curlInMsg:
+		a.importCurl(msg.text)
 	}
 	return nil
 }
@@ -288,4 +291,28 @@ func (a *App) importSaved() {
 		msg += fmt.Sprintf(" · %d need attention (see ## comments): %s", len(warnings), warnings[0])
 	}
 	a.flash(msg)
+}
+
+// importCurl appends a curl command (or URL) to the scratch file and opens it.
+func (a *App) importCurl(text string) {
+	text = strings.TrimSpace(text)
+	if !core.LooksLikeCurl(text) {
+		a.flashErr("no curl command: pass one to :BarqImportCurl or copy it first")
+		return
+	}
+	path, line, err := AppendScratch(a.store, text)
+	if err != nil {
+		a.flashErr(err.Error())
+		return
+	}
+	a.rescan()
+	if err := a.openAt(path, line-1); err != nil {
+		a.flashErr(err.Error())
+		return
+	}
+	if w := ScratchWarnings(text); len(w) > 0 {
+		a.flash("imported · " + w[0])
+		return
+	}
+	a.flash("imported curl into " + ScratchFile)
 }

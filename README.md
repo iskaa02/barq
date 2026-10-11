@@ -48,6 +48,7 @@ project file into `.barq`; its history follows.
 | response: `gd` | diff with the previous response |
 
 Editor commands: `:BarqSend`, `:BarqEnv [name]`, `:BarqSave`, `:BarqCurl` (copy as curl),
+`:BarqImportCurl [curl …]` (import a curl command, from the argument or the clipboard),
 `:BarqImportSaved`, `:BarqQuit`.
 
 Requests are plain `.http` files:
